@@ -104,6 +104,161 @@ async function suggestClozes(settings, material) {
 
 // src/modals.ts
 var import_obsidian = require("obsidian");
+
+// src/utils.ts
+function uid(prefix = "kr") {
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+function startOfDay(time = Date.now()) {
+  const date = new Date(time);
+  date.setHours(0, 0, 0, 0);
+  return date.getTime();
+}
+function addDays(time, days) {
+  const date = new Date(time);
+  date.setDate(date.getDate() + days);
+  date.setHours(8, 0, 0, 0);
+  return date.getTime();
+}
+function normalizeTags(value) {
+  return Array.from(new Set(value.split(/[,，\s]+/).map((tag) => tag.trim().replace(/^#/, "")).filter(Boolean)));
+}
+function stripMdExtension(path) {
+  return path.replace(/\.md$/i, "");
+}
+function escapeFenceValue(value) {
+  return value.replace(/\r?\n/g, " ").trim();
+}
+function serializeExcerpt(spec) {
+  const lines = [
+    "```knowledge-card",
+    `source: ${escapeFenceValue(spec.source)}`,
+    spec.marker ? `marker: ${escapeFenceValue(spec.marker)}` : "",
+    spec.blocks.length ? `blocks: ${spec.blocks.join(", ")}` : "",
+    spec.heading ? `heading: ${escapeFenceValue(spec.heading)}` : "",
+    spec.title ? `title: ${escapeFenceValue(spec.title)}` : "",
+    `color: ${spec.color}`,
+    `showHeading: ${spec.showHeading ? "true" : "false"}`,
+    "```"
+  ];
+  return lines.filter(Boolean).join("\n");
+}
+function parseExcerpt(source) {
+  var _a, _b;
+  const values = /* @__PURE__ */ new Map();
+  for (const rawLine of source.split("\n")) {
+    const match = rawLine.match(/^\s*([A-Za-z]+)\s*:\s*(.*?)\s*$/);
+    if (match) values.set(match[1].toLowerCase(), match[2]);
+  }
+  const path = values.get("source");
+  if (!path) return null;
+  const blocks = ((_b = (_a = values.get("blocks")) != null ? _a : values.get("block")) != null ? _b : "").split(",").map((item) => item.trim().replace(/^\^/, "")).filter(Boolean);
+  return {
+    source: path.replace(/^\[\[|\]\]$/g, ""),
+    blocks,
+    marker: values.get("marker") || void 0,
+    heading: values.get("heading") || void 0,
+    title: values.get("title") || void 0,
+    color: values.get("color") || "blue",
+    showHeading: values.get("showheading") !== "false"
+  };
+}
+function nearestHeading(editor, line) {
+  for (let index = line; index >= 0; index -= 1) {
+    const match = editor.getLine(index).match(/^#{1,6}\s+(.+?)\s*#*\s*$/);
+    if (match) return match[1];
+  }
+  return void 0;
+}
+function fileLink(file, anchor) {
+  return `${stripMdExtension(file.path)}${anchor ? `#${anchor}` : ""}`;
+}
+
+// src/scheduler.ts
+function scheduleReview(card, rating, settings, now = Date.now()) {
+  var _a, _b, _c;
+  const next = { ...card, updatedAt: now };
+  if (card.algorithm === "fixed") {
+    const intervals = settings.fixedIntervals.length ? settings.fixedIntervals : [0, 1, 2, 4, 7, 15, 30];
+    if (rating === "again") {
+      next.fixedStep = 0;
+      next.intervalDays = 0;
+      next.dueAt = now + 10 * 60 * 1e3;
+    } else if (rating === "hard") {
+      const step = Math.max(1, Math.min(card.fixedStep, intervals.length - 1));
+      const days = Math.max(1, (_a = intervals[step]) != null ? _a : 1);
+      next.fixedStep = step;
+      next.intervalDays = days;
+      next.dueAt = addDays(now, days);
+    } else {
+      const step = Math.min(card.fixedStep + 1, intervals.length - 1);
+      const days = (_c = (_b = intervals[step]) != null ? _b : intervals[intervals.length - 1]) != null ? _c : 30;
+      next.fixedStep = step;
+      next.intervalDays = days;
+      next.dueAt = addDays(now, days);
+    }
+    return next;
+  }
+  if (rating === "again") {
+    next.repetitions = 0;
+    next.intervalDays = 1;
+    next.ease = Math.max(1.3, card.ease - 0.2);
+  } else if (rating === "hard") {
+    next.repetitions = card.repetitions + 1;
+    next.intervalDays = Math.max(1, Math.round(Math.max(1, card.intervalDays) * 1.2));
+    next.ease = Math.max(1.3, card.ease - 0.15);
+  } else {
+    next.repetitions = card.repetitions + 1;
+    if (next.repetitions === 1) next.intervalDays = 1;
+    else if (next.repetitions === 2) next.intervalDays = 3;
+    else next.intervalDays = Math.max(1, Math.round(Math.max(1, card.intervalDays) * card.ease));
+    next.ease = Math.min(3.2, card.ease + 0.05);
+  }
+  next.dueAt = addDays(now, next.intervalDays);
+  return next;
+}
+
+// src/card-tools.ts
+function cardTitle(card) {
+  var _a;
+  if ((_a = card.title) == null ? void 0 : _a.trim()) return card.title.trim();
+  if (card.kind === "image") return card.question;
+  const terms = Array.from(card.question.matchAll(/\{\{c\d+::([\s\S]*?)\}\}/g)).map((m) => m[1]);
+  return (terms.length ? terms.slice(0, 3).join(" \xB7 ") : card.question.replace(/[#*`\[\]]/g, "").replace(/\s+/g, " ")).slice(0, 70);
+}
+function adjustBox(box, dx, dy, corner) {
+  const clamp = (n, a, b) => Math.max(a, Math.min(b, n));
+  if (!corner) return { ...box, x: clamp(box.x + dx, 0, 1 - box.width), y: clamp(box.y + dy, 0, 1 - box.height) };
+  let left = box.x, top = box.y, right = left + box.width, bottom = top + box.height;
+  if (corner.includes("w")) left = clamp(left + dx, 0, right - 0.015);
+  else right = clamp(right + dx, left + 0.015, 1);
+  if (corner.includes("n")) top = clamp(top + dy, 0, bottom - 0.015);
+  else bottom = clamp(bottom + dy, top + 0.015, 1);
+  return { x: left, y: top, width: right - left, height: bottom - top };
+}
+function forecast(cards, settings, now = Date.now(), days = 30) {
+  const today = startOfDay(now);
+  const dates = Array.from({ length: days }, (_, i) => addDays(today, i));
+  const indices = new Map(dates.map((t, i) => [startOfDay(t), i]));
+  const known = dates.map(() => 0), projected = dates.map(() => 0);
+  for (const card of cards.filter((c) => !c.suspended)) {
+    let due = Math.max(now, card.dueAt);
+    const first = indices.get(startOfDay(due));
+    if (first === void 0) continue;
+    known[first]++;
+    let state = { ...card };
+    for (let n = 0; n < days; n++) {
+      state = scheduleReview(state, "good", settings, due);
+      due = Math.max(state.dueAt, addDays(due, 1));
+      const index = indices.get(startOfDay(due));
+      if (index === void 0) break;
+      projected[index]++;
+    }
+  }
+  return { dates, known, projected };
+}
+
+// src/modals.ts
 var COLORS = ["blue", "green", "yellow", "red", "purple", "gray"];
 var ExcerptOptionsModal = class extends import_obsidian.Modal {
   constructor(app, initialTitle, suggestedKeyword, selectedText, onSubmit) {
@@ -223,87 +378,110 @@ var ManualExcerptModal = class extends import_obsidian.Modal {
   }
 };
 var ImageOcclusionModal = class extends import_obsidian.Modal {
-  constructor(app, file, onSubmit, initialBoxes = []) {
+  constructor(app, file, onSubmit, initialBoxes = [], initialTitle = "") {
     super(app);
     this.onSubmit = onSubmit;
-    this.boxes = [];
     this.url = URL.createObjectURL(file);
-    this.title = file.name.replace(/\.[^.]+$/, "");
+    this.title = initialTitle;
     this.boxes = initialBoxes.map((box) => ({ ...box }));
   }
   onOpen() {
     this.modalEl.addClass("kr-image-editor-modal");
-    this.setTitle("\u5728\u56FE\u7247\u4E0A\u753B\u65B9\u5757\u6316\u7A7A");
-    this.contentEl.createEl("p", { text: "\u7528\u624B\u6307\u6216\u9F20\u6807\u62D6\u52A8\uFF0C\u6846\u4F4F\u9700\u8981\u9690\u85CF\u7684\u7B54\u6848\u3002\u53EF\u4EE5\u753B\u591A\u4E2A\u65B9\u5757\u3002", cls: "setting-item-description" });
-    new import_obsidian.Setting(this.contentEl).setName("\u95EA\u5361\u6807\u9898").addText((text) => text.setValue(this.title).onChange((value) => {
+    this.setTitle("\u7F16\u8F91\u56FE\u7247\u6316\u7A7A\u65B9\u5757");
+    this.contentEl.createEl("p", { text: "\u7A7A\u767D\u5904\u62D6\u52A8\u753B\u6846\uFF1B\u70B9\u51FB\u65B9\u5757\u9009\u4E2D\uFF0C\u62D6\u52A8\u4E2D\u95F4\u79FB\u52A8\uFF0C\u62D6\u52A8\u56DB\u89D2\u7F29\u653E\u3002", cls: "setting-item-description" });
+    new import_obsidian.Setting(this.contentEl).setName("\u56FE\u7247\u5361\u6807\u9898").setDesc("\u624B\u52A8\u586B\u5199\uFF1B\u7559\u7A7A\u81EA\u52A8\u4F7F\u7528 1\u30012\u30013\u2026\u2026").addText((text) => text.setValue(this.title).onChange((value) => {
       this.title = value;
     }));
     const stage = this.contentEl.createDiv({ cls: "kr-image-stage" });
     const picture = stage.createEl("img", { attr: { src: this.url, alt: "\u5F85\u6316\u7A7A\u56FE\u7247", draggable: "false" } });
     const overlay = stage.createDiv({ cls: "kr-image-overlay" });
     const counter = this.contentEl.createEl("p", { cls: "setting-item-description" });
+    let selected = -1;
+    const history = [];
+    const snapshot = () => this.boxes.map((box) => ({ ...box }));
     const redraw = () => {
       overlay.empty();
-      for (const box of this.boxes) {
-        const block = overlay.createDiv({ cls: "kr-editor-box" });
+      this.boxes.forEach((box, index) => {
+        const block = overlay.createDiv({ cls: `kr-editor-box ${index === selected ? "is-selected" : ""}` });
+        block.dataset.index = String(index);
         placeBox(block, box);
-      }
-      counter.setText(`\u5DF2\u753B ${this.boxes.length} \u4E2A\u65B9\u5757`);
+        if (index === selected) for (const corner of ["nw", "ne", "sw", "se"]) {
+          const handle = block.createDiv({ cls: `kr-resize-handle kr-handle-${corner}` });
+          handle.dataset.corner = corner;
+        }
+      });
+      counter.setText(`\u5171 ${this.boxes.length} \u4E2A\u65B9\u5757${selected >= 0 ? ` \xB7 \u5DF2\u9009\u4E2D ${selected + 1}` : ""}`);
     };
-    let start = null;
-    let draft = null;
     const point = (event) => {
       const rect = picture.getBoundingClientRect();
-      return {
-        x: Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)),
-        y: Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height))
-      };
+      return { x: Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)), y: Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height)) };
     };
-    const rectangle = (from, to) => ({
-      x: Math.min(from.x, to.x),
-      y: Math.min(from.y, to.y),
-      width: Math.abs(to.x - from.x),
-      height: Math.abs(to.y - from.y)
-    });
+    let gesture = null;
+    let draft = null;
     stage.addEventListener("pointerdown", (event) => {
-      if (!picture.complete || !picture.naturalWidth) return;
+      if (gesture || !picture.complete || !picture.naturalWidth) return;
       event.preventDefault();
+      const target = event.target;
+      const hit = target.closest(".kr-editor-box");
+      selected = hit ? Number(hit.dataset.index) : -1;
+      gesture = { id: event.pointerId, from: point(event), box: selected >= 0 ? { ...this.boxes[selected] } : void 0, corner: target.dataset.corner, before: snapshot() };
+      redraw();
+      if (selected < 0) draft = overlay.createDiv({ cls: "kr-editor-box" });
       stage.setPointerCapture(event.pointerId);
-      start = point(event);
-      draft = overlay.createDiv({ cls: "kr-editor-box kr-editor-draft" });
     });
     stage.addEventListener("pointermove", (event) => {
-      if (start && draft) placeBox(draft, rectangle(start, point(event)));
+      if (!gesture || gesture.id !== event.pointerId) return;
+      const end = point(event), dx = end.x - gesture.from.x, dy = end.y - gesture.from.y;
+      if (gesture.box) {
+        this.boxes[selected] = adjustBox(gesture.box, dx, dy, gesture.corner);
+        const node = overlay.querySelector(`[data-index="${selected}"]`);
+        if (node) placeBox(node, this.boxes[selected]);
+      } else if (draft) placeBox(draft, { x: Math.min(end.x, gesture.from.x), y: Math.min(end.y, gesture.from.y), width: Math.abs(dx), height: Math.abs(dy) });
     });
-    const finish = (event) => {
-      if (!start) return;
-      const box = rectangle(start, point(event));
-      start = null;
-      draft == null ? void 0 : draft.remove();
+    stage.addEventListener("pointerup", (event) => {
+      if (!gesture || gesture.id !== event.pointerId) return;
+      const end = point(event);
+      if (!gesture.box) {
+        const box = { x: Math.min(end.x, gesture.from.x), y: Math.min(end.y, gesture.from.y), width: Math.abs(end.x - gesture.from.x), height: Math.abs(end.y - gesture.from.y) };
+        if (box.width >= 0.015 && box.height >= 0.015) {
+          this.boxes.push(box);
+          selected = this.boxes.length - 1;
+        }
+      }
+      if (JSON.stringify(this.boxes) !== JSON.stringify(gesture.before)) history.push(gesture.before);
+      gesture = null;
       draft = null;
-      if (box.width >= 0.015 && box.height >= 0.015) this.boxes.push(box);
       redraw();
-    };
-    stage.addEventListener("pointerup", finish);
+    });
     stage.addEventListener("pointercancel", () => {
-      start = null;
-      draft == null ? void 0 : draft.remove();
+      if (gesture) this.boxes = gesture.before;
+      gesture = null;
       draft = null;
+      redraw();
     });
-    new import_obsidian.Setting(this.contentEl).addButton((button) => button.setButtonText("\u64A4\u9500\u4E0A\u4E00\u4E2A").onClick(() => {
-      this.boxes.pop();
+    new import_obsidian.Setting(this.contentEl).addButton((button) => button.setButtonText("\u64A4\u9500").onClick(() => {
+      const prior = history.pop();
+      if (prior) this.boxes = prior;
+      selected = -1;
       redraw();
-    })).addButton((button) => button.setButtonText("\u6E05\u7A7A\u65B9\u5757").onClick(() => {
+    })).addButton((button) => button.setButtonText("\u5220\u9664\u9009\u4E2D\u65B9\u5757").onClick(() => {
+      if (selected < 0) return;
+      history.push(snapshot());
+      this.boxes.splice(selected, 1);
+      selected = -1;
+      redraw();
+    })).addButton((button) => button.setButtonText("\u6E05\u7A7A").onClick(() => {
+      history.push(snapshot());
       this.boxes = [];
+      selected = -1;
       redraw();
-    })).addButton((button) => button.setCta().setButtonText("\u7EE7\u7EED\u8BBE\u7F6E\u590D\u4E60\u4FE1\u606F").onClick(() => {
+    })).addButton((button) => button.setCta().setButtonText("\u4FDD\u5B58\u65B9\u5757\u5E76\u7EE7\u7EED").onClick(() => {
       if (!this.boxes.length) {
-        new import_obsidian.Notice("\u8BF7\u5148\u753B\u81F3\u5C11\u4E00\u4E2A\u65B9\u5757\u3002");
+        new import_obsidian.Notice("\u8BF7\u753B\u81F3\u5C11\u4E00\u4E2A\u65B9\u5757\u3002");
         return;
       }
-      const boxes = this.boxes.map((box) => ({ ...box }));
       this.close();
-      this.onSubmit(this.title, boxes);
+      this.onSubmit(this.title.trim(), snapshot());
     }));
     redraw();
   }
@@ -314,6 +492,7 @@ var ImageOcclusionModal = class extends import_obsidian.Modal {
 };
 var FlashcardEditModal = class extends import_obsidian.Modal {
   constructor(app, card, onSubmit) {
+    var _a, _b;
     super(app);
     this.card = card;
     this.onSubmit = onSubmit;
@@ -321,9 +500,22 @@ var FlashcardEditModal = class extends import_obsidian.Modal {
     this.answer = card.answer;
     this.deck = card.deck;
     this.tags = card.tags.join(", ");
+    this.title = cardTitle(card);
+    this.color = card.color;
+    this.sourceText = (_b = (_a = card.source) == null ? void 0 : _a.text) != null ? _b : "";
   }
   onOpen() {
+    this.modalEl.addClass("kr-edit-modal");
     this.setTitle("\u7F16\u8F91\u95EA\u5361");
+    if (this.card.kind !== "image") new import_obsidian.Setting(this.contentEl).setName("\u5173\u952E\u8BCD\u6807\u9898").addText((input) => input.setValue(this.title).onChange((value) => {
+      this.title = value;
+    }));
+    new import_obsidian.Setting(this.contentEl).setName("\u5361\u7247\u5E95\u8272").addDropdown((input) => {
+      for (const color of COLORS) input.addOption(color, colorLabel(color));
+      input.setValue(this.color).onChange((value) => {
+        this.color = value;
+      });
+    });
     this.contentEl.createEl("p", { text: "\u8FD9\u91CC\u53EA\u4FEE\u6539\u95EA\u5361\u5185\u5BB9\uFF0C\u4E0D\u4F1A\u66F4\u6539\u539F\u6587\u7B14\u8BB0\u3002", cls: "setting-item-description" });
     new import_obsidian.Setting(this.contentEl).setName(this.card.kind === "image" ? "\u56FE\u7247\u5361\u6807\u9898" : "\u95EE\u9898\uFF0F\u6316\u7A7A\u5185\u5BB9").addTextArea((input) => input.setValue(this.question).onChange((value) => {
       this.question = value;
@@ -339,6 +531,9 @@ var FlashcardEditModal = class extends import_obsidian.Modal {
     new import_obsidian.Setting(this.contentEl).setName("\u6807\u7B7E").addText((input) => input.setValue(this.tags).onChange((value) => {
       this.tags = value;
     }));
+    if (this.card.source && this.card.kind !== "image") new import_obsidian.Setting(this.contentEl).setName("\u6765\u6E90\u539F\u6587\u7247\u6BB5").setDesc("\u4EC5\u7528\u4E8E\u5B9A\u4F4D\uFF1B\u586B\u5199\u539F\u7B14\u8BB0\u4E2D\u786E\u5B9E\u5B58\u5728\u7684\u6587\u5B57\uFF0C\u4E0D\u4F1A\u66F4\u6539\u7B14\u8BB0\u3002").addTextArea((input) => input.setValue(this.sourceText).onChange((value) => {
+      this.sourceText = value;
+    }));
     new import_obsidian.Setting(this.contentEl).addButton((button) => button.setCta().setButtonText("\u4FDD\u5B58\u4FEE\u6539").onClick(() => {
       if (!this.question.trim() || !this.deck.trim()) {
         new import_obsidian.Notice("\u6807\u9898\u548C\u5361\u7EC4\u4E0D\u80FD\u4E3A\u7A7A\u3002");
@@ -350,7 +545,10 @@ var FlashcardEditModal = class extends import_obsidian.Modal {
         answer: this.answer,
         deck: this.deck,
         tags: this.tags.split(/[,，\s]+/).map((tag) => tag.replace(/^#/, "").trim()).filter(Boolean),
-        occlusions: this.card.occlusions
+        occlusions: this.card.occlusions,
+        title: this.card.kind === "image" ? void 0 : this.title,
+        color: this.color,
+        source: this.card.source ? { ...this.card.source, text: this.sourceText || this.card.source.text } : void 0
       });
     }));
   }
@@ -469,89 +667,15 @@ function colorLabel(color) {
 
 // src/review-view.ts
 var import_obsidian2 = require("obsidian");
-
-// src/utils.ts
-function uid(prefix = "kr") {
-  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-}
-function startOfDay(time = Date.now()) {
-  const date = new Date(time);
-  date.setHours(0, 0, 0, 0);
-  return date.getTime();
-}
-function addDays(time, days) {
-  const date = new Date(time);
-  date.setDate(date.getDate() + days);
-  date.setHours(8, 0, 0, 0);
-  return date.getTime();
-}
-function normalizeTags(value) {
-  return Array.from(new Set(value.split(/[,，\s]+/).map((tag) => tag.trim().replace(/^#/, "")).filter(Boolean)));
-}
-function stripMdExtension(path) {
-  return path.replace(/\.md$/i, "");
-}
-function escapeFenceValue(value) {
-  return value.replace(/\r?\n/g, " ").trim();
-}
-function serializeExcerpt(spec) {
-  const lines = [
-    "```knowledge-card",
-    `source: ${escapeFenceValue(spec.source)}`,
-    spec.marker ? `marker: ${escapeFenceValue(spec.marker)}` : "",
-    spec.blocks.length ? `blocks: ${spec.blocks.join(", ")}` : "",
-    spec.heading ? `heading: ${escapeFenceValue(spec.heading)}` : "",
-    spec.title ? `title: ${escapeFenceValue(spec.title)}` : "",
-    `color: ${spec.color}`,
-    `showHeading: ${spec.showHeading ? "true" : "false"}`,
-    "```"
-  ];
-  return lines.filter(Boolean).join("\n");
-}
-function parseExcerpt(source) {
-  var _a, _b;
-  const values = /* @__PURE__ */ new Map();
-  for (const rawLine of source.split("\n")) {
-    const match = rawLine.match(/^\s*([A-Za-z]+)\s*:\s*(.*?)\s*$/);
-    if (match) values.set(match[1].toLowerCase(), match[2]);
-  }
-  const path = values.get("source");
-  if (!path) return null;
-  const blocks = ((_b = (_a = values.get("blocks")) != null ? _a : values.get("block")) != null ? _b : "").split(",").map((item) => item.trim().replace(/^\^/, "")).filter(Boolean);
-  return {
-    source: path.replace(/^\[\[|\]\]$/g, ""),
-    blocks,
-    marker: values.get("marker") || void 0,
-    heading: values.get("heading") || void 0,
-    title: values.get("title") || void 0,
-    color: values.get("color") || "blue",
-    showHeading: values.get("showheading") !== "false"
-  };
-}
-function nearestHeading(editor, line) {
-  for (let index = line; index >= 0; index -= 1) {
-    const match = editor.getLine(index).match(/^#{1,6}\s+(.+?)\s*#*\s*$/);
-    if (match) return match[1];
-  }
-  return void 0;
-}
-function fileLink(file, anchor) {
-  return `${stripMdExtension(file.path)}${anchor ? `#${anchor}` : ""}`;
-}
-
-// src/review-view.ts
 var REVIEW_VIEW_TYPE = "knowledge-review-view";
 var ReviewView = class extends import_obsidian2.ItemView {
   constructor(leaf, host) {
     super(leaf);
     this.host = host;
-    this.revealed = false;
-    this.activeCardId = "";
-    this.revealedBlanks = /* @__PURE__ */ new Set();
-    this.index = 0;
-    this.managerOpen = false;
-    this.managerQuery = "";
-    this.filters = { deck: "", source: "", tag: "", color: "" };
+    this.query = "";
+    this.order = "newest";
+    this.onlyDue = false;
+    this.filters = { deck: "", tag: "", color: "" };
   }
   getViewType() {
     return REVIEW_VIEW_TYPE;
@@ -563,153 +687,254 @@ var ReviewView = class extends import_obsidian2.ItemView {
     return "brain-circuit";
   }
   async onOpen() {
-    await this.render();
+    this.render();
   }
   refresh() {
-    void this.render();
+    this.render();
   }
-  filteredDue() {
-    return this.host.getDueCards().filter(
-      (card) => {
-        var _a;
-        return (!this.filters.deck || card.deck === this.filters.deck) && (!this.filters.source || ((_a = card.source) == null ? void 0 : _a.path) === this.filters.source) && (!this.filters.tag || card.tags.includes(this.filters.tag)) && (!this.filters.color || card.color === this.filters.color);
-      }
-    );
-  }
-  async render() {
-    var _a, _b, _c, _d, _e, _f;
+  render() {
     const root = this.contentEl;
     root.empty();
     root.addClass("kr-review-view");
-    const header = root.createDiv({ cls: "kr-review-header" });
-    const titleRow = header.createDiv({ cls: "kr-review-title-row" });
-    const icon = titleRow.createSpan();
-    (0, import_obsidian2.setIcon)(icon, "brain-circuit");
-    titleRow.createEl("h2", { text: "\u4ECA\u65E5\u590D\u4E60" });
-    titleRow.createSpan({ text: String(this.host.getDueCards().length), cls: "kr-due-badge" });
-    this.renderFilters(header);
-    this.renderManager(header);
-    const cards = this.filteredDue();
-    if (!cards.length) {
-      const empty = root.createDiv({ cls: "kr-empty" });
-      const emptyIcon = empty.createSpan();
-      (0, import_obsidian2.setIcon)(emptyIcon, "circle-check-big");
-      empty.createEl("h3", { text: "\u4ECA\u5929\u5DF2\u5B8C\u6210" });
-      empty.createEl("p", { text: "\u5F53\u524D\u7B5B\u9009\u6761\u4EF6\u4E0B\u6CA1\u6709\u5230\u671F\u5361\u7247\u3002" });
-      this.renderStats(root);
-      return;
+    const header = root.createDiv({ cls: "kr-review-title-row" });
+    (0, import_obsidian2.setIcon)(header.createSpan(), "brain-circuit");
+    header.createEl("h2", { text: "\u95EA\u5361\u590D\u4E60" });
+    header.createSpan({ text: String(this.host.getDueCards().length), cls: "kr-due-badge" });
+    const start = root.createEl("button", { text: "\u5F00\u59CB\u4ECA\u65E5\u590D\u4E60", cls: "mod-cta" });
+    start.disabled = !this.host.getDueCards().length;
+    start.addEventListener("click", () => this.nextDue());
+    const toolbar = root.createDiv({ cls: "kr-library-toolbar" });
+    const search = toolbar.createEl("input", { type: "search", placeholder: "\u641C\u7D22\u6807\u9898\u3001\u5185\u5BB9\u6216\u6807\u7B7E" });
+    search.value = this.query;
+    const sorting = toolbar.createEl("select", { attr: { "aria-label": "\u6392\u5E8F\u65B9\u5F0F" } });
+    for (const [value, label] of [["newest", "\u521B\u5EFA\u65F6\u95F4\uFF1A\u65B0\u2192\u65E7"], ["oldest", "\u521B\u5EFA\u65F6\u95F4\uFF1A\u65E7\u2192\u65B0"], ["modified", "\u6700\u8FD1\u4FEE\u6539"], ["due", "\u6700\u8FD1\u5230\u671F"]]) sorting.createEl("option", { value, text: label });
+    sorting.value = this.order;
+    const dueLabel = toolbar.createEl("label");
+    const dueCheck = dueLabel.createEl("input", { type: "checkbox" });
+    dueCheck.checked = this.onlyDue;
+    dueLabel.appendText("\u53EA\u770B\u5F85\u590D\u4E60");
+    for (const [key, label, values] of [
+      ["deck", "\u6240\u6709\u5361\u7EC4", unique(this.host.getAllCards().map((c) => c.deck))],
+      ["tag", "\u6240\u6709\u6807\u7B7E", unique(this.host.getAllCards().flatMap((c) => c.tags))],
+      ["color", "\u6240\u6709\u989C\u8272", unique(this.host.getAllCards().map((c) => c.color))]
+    ]) {
+      const select = toolbar.createEl("select", { attr: { "aria-label": label } });
+      select.createEl("option", { value: "", text: label });
+      for (const value of values) select.createEl("option", { value, text: value });
+      select.value = this.filters[key];
+      select.addEventListener("change", () => {
+        this.filters[key] = select.value;
+        renderGroups();
+      });
     }
-    this.index = Math.min(this.index, cards.length - 1);
-    const card = cards[this.index];
-    if (this.activeCardId !== card.id) {
-      this.activeCardId = card.id;
-      this.revealed = false;
-      this.revealedBlanks.clear();
+    const groups = root.createDiv({ cls: "kr-tag-library" });
+    const renderGroups = () => {
+      var _a, _b;
+      groups.empty();
+      const query = this.query.toLowerCase();
+      const cards = this.host.getAllCards().filter((c) => (!this.onlyDue || !c.suspended && c.dueAt <= Date.now()) && (!this.filters.deck || c.deck === this.filters.deck) && (!this.filters.tag || c.tags.includes(this.filters.tag)) && (!this.filters.color || c.color === this.filters.color) && `${cardTitle(c)} ${c.question} ${c.answer} ${c.tags.join(" ")}`.toLowerCase().includes(query));
+      cards.sort((a, b) => this.order === "oldest" ? a.createdAt - b.createdAt : this.order === "modified" ? b.updatedAt - a.updatedAt : this.order === "due" ? a.dueAt - b.dueAt : b.createdAt - a.createdAt);
+      const tags = unique(cards.flatMap((c) => c.tags.length ? c.tags : ["\u672A\u5206\u7C7B"]));
+      for (const tag of tags) {
+        const section = groups.createEl("section", { cls: "kr-tag-section" });
+        const members = cards.filter((c) => c.tags.length ? c.tags.includes(tag) : tag === "\u672A\u5206\u7C7B");
+        section.createEl("h3", { text: `${tag} \xB7 ${members.length}` });
+        const grid = section.createDiv({ cls: "kr-tile-grid" });
+        for (const card of members) {
+          const tile = grid.createDiv({ cls: `kr-card-tile kr-color-${card.color}`, attr: { role: "button", tabindex: "0" } });
+          tile.createEl("strong", { text: cardTitle(card) });
+          const preview = card.kind === "image" ? `\u56FE\u7247\u6316\u7A7A \xB7 ${(_b = (_a = card.occlusions) == null ? void 0 : _a.length) != null ? _b : 0} \u4E2A\u65B9\u5757` : card.question.replace(/\{\{c\d+::([\s\S]*?)\}\}/g, "\uFF3B\u2026\u2026\uFF3D").replace(/[#*`]/g, "");
+          tile.createEl("p", { text: preview.slice(0, 160), cls: "kr-tile-preview" });
+          const bottom = tile.createDiv({ cls: "kr-tile-bottom" });
+          bottom.createSpan({ text: card.suspended ? "\u5DF2\u6682\u505C" : card.dueAt <= Date.now() ? "\u5F85\u590D\u4E60" : new Date(card.dueAt).toLocaleDateString(), cls: "kr-tile-due" });
+          bottom.createSpan({ text: card.deck, cls: "kr-tile-deck" });
+          const open = () => new CardDetailModal(this.app, this.host, card).open();
+          tile.addEventListener("click", open);
+          tile.addEventListener("keydown", (e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              open();
+            }
+          });
+        }
+      }
+      if (!cards.length) groups.createEl("p", { text: "\u5F53\u524D\u6761\u4EF6\u4E0B\u6CA1\u6709\u95EA\u5361\u3002" });
+    };
+    search.addEventListener("input", () => {
+      this.query = search.value;
+      renderGroups();
+    });
+    sorting.addEventListener("change", () => {
+      this.order = sorting.value;
+      renderGroups();
+    });
+    dueCheck.addEventListener("change", () => {
+      this.onlyDue = dueCheck.checked;
+      renderGroups();
+    });
+    renderGroups();
+    this.renderStats(root);
+    this.renderForecast(root);
+  }
+  nextDue() {
+    const card = this.host.getDueCards()[0];
+    if (card) new CardDetailModal(this.app, this.host, card, () => this.nextDue()).open();
+    else new import_obsidian2.Notice("\u4ECA\u5929\u7684\u590D\u4E60\u5DF2\u5B8C\u6210\u3002");
+  }
+  renderStats(parent) {
+    var _a, _b;
+    const section = parent.createDiv({ cls: "kr-stats" });
+    section.createEl("h3", { text: "\u672C\u6708\u590D\u4E60\u65E5\u5386" });
+    const now = /* @__PURE__ */ new Date(), year = now.getFullYear(), month = now.getMonth();
+    const counts = /* @__PURE__ */ new Map();
+    for (const log of this.host.getReviewLog()) {
+      const date = new Date(log.reviewedAt);
+      if (date.getFullYear() === year && date.getMonth() === month) counts.set(date.getDate(), ((_a = counts.get(date.getDate())) != null ? _a : 0) + 1);
     }
-    const progress = root.createDiv({ cls: "kr-review-progress" });
-    progress.createSpan({ text: `${this.index + 1} / ${cards.length}` });
-    progress.createSpan({ text: card.deck });
+    section.createEl("p", { text: `${year}\u5E74${month + 1}\u6708 \xB7 \u5DF2\u590D\u4E60 ${Array.from(counts.values()).reduce((a, b) => a + b, 0)} \u6B21`, cls: "kr-stat-summary" });
+    const calendar = section.createDiv({ cls: "kr-calendar" });
+    for (const day of ["\u4E00", "\u4E8C", "\u4E09", "\u56DB", "\u4E94", "\u516D", "\u65E5"]) calendar.createDiv({ text: day, cls: "kr-weekday" });
+    for (let n = 0; n < (new Date(year, month, 1).getDay() + 6) % 7; n++) calendar.createDiv({ cls: "kr-day kr-day-empty" });
+    for (let day = 1; day <= new Date(year, month + 1, 0).getDate(); day++) {
+      const count = (_b = counts.get(day)) != null ? _b : 0;
+      const level = count === 0 ? 0 : count <= 2 ? 1 : count <= 5 ? 2 : count <= 10 ? 3 : 4;
+      const cell = calendar.createEl("button", { text: String(day), cls: `kr-day kr-heat-${level}`, attr: { "aria-label": `${day} \u65E5\u590D\u4E60 ${count} \u6B21` } });
+      cell.title = `${day} \u65E5\u590D\u4E60 ${count} \u6B21`;
+      cell.addEventListener("click", () => new import_obsidian2.Notice(`${month + 1}\u6708${day}\u65E5 \xB7 \u590D\u4E60 ${count} \u6B21`));
+      if (startOfDay(new Date(year, month, day).getTime()) === startOfDay()) cell.addClass("is-today");
+    }
+    const legend = section.createDiv({ cls: "kr-heat-legend" });
+    ["0 \u6B21", "1\u20132", "3\u20135", "6\u201310", "11+"].forEach((label, level) => legend.createSpan({ text: label, cls: `kr-heat-${level}` }));
+  }
+  renderForecast(parent) {
+    const section = parent.createDiv({ cls: "kr-stats kr-forecast" });
+    section.createEl("h3", { text: "\u672A\u6765 30 \u5929\u590D\u4E60\u6570\u91CF\u9884\u89C8" });
+    section.createEl("p", { text: "\u84DD\u7EBF\uFF1A\u5DF2\u786E\u5B9A\u5230\u671F\u91CF\uFF1B\u6A59\u7EBF\uFF1A\u6BCF\u6B21\u90FD\u9009\u201C\u8BB0\u5F97\u201D\u65F6\u7684\u9884\u8BA1\u603B\u91CF\u3002\u903E\u671F\u5361\u8BA1\u5165\u4ECA\u5929\uFF1B\u5B9E\u9645\u8BC4\u5206\u4F1A\u6539\u53D8\u540E\u7EED\u5B89\u6392\u3002", cls: "kr-stat-summary" });
+    const data = forecast(this.host.getAllCards(), this.host.getSettings());
+    const totals = data.known.map((n, i) => n + data.projected[i]);
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 600 220");
+    svg.setAttribute("role", "img");
+    svg.setAttribute("aria-label", "\u672A\u676530\u5929\u95EA\u5361\u590D\u4E60\u6570\u91CF\u66F2\u7EBF");
+    section.append(svg);
+    const max = Math.max(1, ...totals), x = (i) => 40 + i * 540 / 29, y = (n) => 185 - n * 155 / max;
+    const add = (tag, attrs, text) => {
+      const el = document.createElementNS("http://www.w3.org/2000/svg", tag);
+      for (const [key, value] of Object.entries(attrs)) el.setAttribute(key, value);
+      if (text) el.textContent = text;
+      svg.append(el);
+      return el;
+    };
+    for (const n of [0, Math.ceil(max / 2), max]) {
+      add("line", { x1: "40", x2: "580", y1: String(y(n)), y2: String(y(n)), stroke: "var(--background-modifier-border)" });
+      add("text", { x: "4", y: String(y(n) + 4), fill: "var(--text-muted)", "font-size": "12" }, String(n));
+    }
+    for (const [values, color] of [[totals, "#d77822"], [data.known, "#397ac9"]]) {
+      add("polyline", { points: values.map((n, i) => `${x(i)},${y(n)}`).join(" "), fill: "none", stroke: color, "stroke-width": "2.5" });
+      values.forEach((n, i) => {
+        const dot = add("circle", { cx: String(x(i)), cy: String(y(n)), r: "3", fill: color });
+        const title = document.createElementNS(svg.namespaceURI, "title");
+        title.textContent = `${new Date(data.dates[i]).toLocaleDateString()}\uFF1A\u5DF2\u786E\u5B9A ${data.known[i]}\uFF1B\u9884\u8BA1\u603B\u91CF ${totals[i]}`;
+        dot.append(title);
+      });
+    }
+    for (const i of [0, 7, 14, 21, 29]) add("text", { x: String(x(i)), y: "208", "text-anchor": "middle", fill: "var(--text-muted)", "font-size": "12" }, new Date(data.dates[i]).toLocaleDateString(void 0, { month: "numeric", day: "numeric" }));
+    const details = section.createEl("details");
+    details.createEl("summary", { text: "\u67E5\u770B\u6BCF\u5929\u6570\u91CF" });
+    const table = details.createEl("table");
+    const head = table.createEl("tr");
+    ["\u65E5\u671F", "\u5DF2\u786E\u5B9A", "\u9884\u8BA1\u603B\u91CF"].forEach((text) => head.createEl("th", { text }));
+    data.dates.forEach((date, i) => {
+      const row = table.createEl("tr");
+      [new Date(date).toLocaleDateString(), String(data.known[i]), String(totals[i])].forEach((text) => row.createEl("td", { text }));
+    });
+  }
+};
+function unique(values) {
+  return Array.from(new Set(values)).sort((a, b) => a.localeCompare(b));
+}
+var CardDetailModal = class extends import_obsidian2.Modal {
+  constructor(app, host, card, afterRating) {
+    super(app);
+    this.host = host;
+    this.card = card;
+    this.afterRating = afterRating;
+    this.revealed = false;
+    this.revealedBlanks = /* @__PURE__ */ new Set();
+    this.component = new import_obsidian2.Component();
+  }
+  onOpen() {
+    this.component.load();
+    this.modalEl.addClass("kr-detail-modal");
+    void this.render();
+  }
+  onClose() {
+    this.component.unload();
+    this.contentEl.empty();
+  }
+  async render() {
+    var _a, _b, _c, _d;
+    const card = this.card, root = this.contentEl;
+    root.empty();
+    this.setTitle(cardTitle(card));
     const cardEl = root.createDiv({ cls: `kr-flashcard kr-color-${card.color}` });
-    cardEl.createEl("div", { text: card.kind === "image" ? "\u56FE\u7247\u6316\u7A7A\u5361" : card.kind === "cloze" ? "\u6316\u7A7A\u5361" : "\u95EE\u7B54\u5361", cls: "kr-card-kind" });
+    if (card.dueAt > Date.now()) cardEl.createEl("p", { text: "\u63D0\u524D\u590D\u4E60\u5E76\u8BC4\u5206\u4F1A\u91CD\u65B0\u5B89\u6392\u4E0B\u6B21\u590D\u4E60\u65F6\u95F4\u3002", cls: "kr-stat-summary" });
     const questionEl = cardEl.createDiv({ cls: "kr-question markdown-rendered" });
     if (card.kind === "image") {
-      await import_obsidian2.MarkdownRenderer.render(this.app, card.question, questionEl, (_b = (_a = card.source) == null ? void 0 : _a.path) != null ? _b : "", this);
       this.renderImage(card, cardEl);
-    } else if (card.kind === "cloze") {
-      await this.renderCloze(card, questionEl, cardEl);
-    } else {
-      await import_obsidian2.MarkdownRenderer.render(this.app, card.question, questionEl, (_d = (_c = card.source) == null ? void 0 : _c.path) != null ? _d : "", this);
-    }
-    if (card.kind === "qa" && !this.revealed) {
-      const reveal = cardEl.createEl("button", { text: "\u663E\u793A\u7B54\u6848", cls: "mod-cta kr-reveal" });
-      reveal.addEventListener("click", () => {
+    } else if (card.kind === "cloze") await this.renderCloze(card, questionEl, cardEl);
+    else await import_obsidian2.MarkdownRenderer.render(this.app, card.question, questionEl, (_b = (_a = card.source) == null ? void 0 : _a.path) != null ? _b : "", this.component);
+    if (card.kind === "qa") {
+      if (!this.revealed) cardEl.createEl("button", { text: "\u663E\u793A\u7B54\u6848", cls: "kr-reveal mod-cta" }).addEventListener("click", () => {
         this.revealed = true;
         void this.render();
       });
-    } else if (card.kind === "qa") {
-      const answerEl = cardEl.createDiv({ cls: "kr-answer markdown-rendered" });
-      answerEl.createEl("div", { text: "\u7B54\u6848", cls: "kr-answer-label" });
-      await import_obsidian2.MarkdownRenderer.render(this.app, card.answer, answerEl, (_f = (_e = card.source) == null ? void 0 : _e.path) != null ? _f : "", this);
-    }
-    if (this.revealed || card.kind !== "qa" && this.revealedBlanks.size > 0) {
-      const actions = cardEl.createDiv({ cls: "kr-rating-actions" });
-      this.ratingButton(actions, "\u5FD8\u8BB0", "again", card);
-      this.ratingButton(actions, "\u56F0\u96BE", "hard", card);
-      this.ratingButton(actions, "\u8BB0\u5F97", "good", card);
-    }
-    const meta = cardEl.createDiv({ cls: "kr-card-meta" });
-    if (card.tags.length) meta.createSpan({ text: card.tags.map((tag) => `#${tag}`).join(" ") });
-    if (card.source) {
-      const source = meta.createEl("button", { text: `\u6765\u6E90\uFF1A${card.source.path}`, cls: "kr-source-button" });
-      source.addEventListener("click", () => {
-        var _a2, _b2, _c2, _d2;
-        const anchor = ((_a2 = card.source) == null ? void 0 : _a2.blockId) ? `^${card.source.blockId}` : (_b2 = card.source) == null ? void 0 : _b2.heading;
-        void this.app.workspace.openLinkText(`${stripMdExtension((_d2 = (_c2 = card.source) == null ? void 0 : _c2.path) != null ? _d2 : "")}${anchor ? `#${anchor}` : ""}`, "", false);
-      });
-    }
-    this.renderStats(root);
-  }
-  renderManager(parent) {
-    const details = parent.createEl("details", { cls: "kr-manager" });
-    details.open = this.managerOpen;
-    details.addEventListener("toggle", () => {
-      this.managerOpen = details.open;
-    });
-    details.createEl("summary", { text: `\u7BA1\u7406\u95EA\u5361\uFF08${this.host.getAllCards().length}\uFF09` });
-    const search = details.createEl("input", { type: "search", placeholder: "\u641C\u7D22\u5361\u7247\u5185\u5BB9\u6216\u5361\u7EC4", cls: "kr-manager-search" });
-    search.value = this.managerQuery;
-    const list = details.createDiv({ cls: "kr-manager-list" });
-    const drawList = () => {
-      list.empty();
-      const query = this.managerQuery.toLowerCase();
-      const cards = this.host.getAllCards().filter((card) => `${card.question} ${card.answer} ${card.deck}`.toLowerCase().includes(query));
-      for (const card of cards) {
-        const row = list.createDiv({ cls: "kr-manager-row" });
-        row.createSpan({ text: `[${card.deck}] ${card.question.replace(/\{\{c\d+::([\s\S]*?)\}\}/g, "$1").slice(0, 90)}` });
-        const controls = row.createDiv({ cls: "kr-manager-controls" });
-        controls.createEl("button", { text: "\u7F16\u8F91" }).addEventListener("click", () => {
-          new FlashcardEditModal(this.app, card, (changes) => {
-            void this.host.updateCard(card.id, changes).catch((error) => new import_obsidian2.Notice(error instanceof Error ? error.message : "\u4FDD\u5B58\u95EA\u5361\u5931\u8D25\u3002"));
-          }).open();
-        });
-        if (card.kind === "image") {
-          controls.createEl("button", { text: "\u8C03\u6574\u65B9\u5757" }).addEventListener("click", () => {
-            void this.editImageBoxes(card);
-          });
-        }
-        controls.createEl("button", { text: "\u5220\u9664" }).addEventListener("click", () => {
-          new DeleteFlashcardModal(this.app, card, () => {
-            void this.host.deleteCard(card.id).catch((error) => new import_obsidian2.Notice(error instanceof Error ? error.message : "\u5220\u9664\u95EA\u5361\u5931\u8D25\u3002"));
-          }).open();
-        });
+      else {
+        const answer = cardEl.createDiv({ cls: "kr-answer markdown-rendered" });
+        await import_obsidian2.MarkdownRenderer.render(this.app, card.answer, answer, (_d = (_c = card.source) == null ? void 0 : _c.path) != null ? _d : "", this.component);
       }
-      if (!cards.length) list.createEl("p", { text: "\u6CA1\u6709\u5339\u914D\u7684\u95EA\u5361\u3002" });
-    };
-    search.addEventListener("input", () => {
-      this.managerQuery = search.value;
-      drawList();
+    }
+    if (this.revealed || this.revealedBlanks.size) this.ensureRatingActions(cardEl, card);
+    const meta = cardEl.createDiv({ cls: "kr-card-meta" });
+    if (card.source) meta.createEl("button", { text: `\u6765\u6E90\uFF1A${card.source.path}`, cls: "kr-source-button" }).addEventListener("click", () => {
+      this.close();
+      void this.host.openCardSource(card).catch((error) => new import_obsidian2.Notice(String(error)));
     });
-    drawList();
+    meta.createSpan({ text: card.deck, cls: "kr-tile-deck" });
+    const controls = root.createDiv({ cls: "kr-detail-controls" });
+    controls.createEl("button", { text: "\u7F16\u8F91\u5185\u5BB9" }).addEventListener("click", () => {
+      new FlashcardEditModal(this.app, card, (changes) => {
+        void this.host.updateCard(card.id, changes).then(() => {
+          this.revealed = false;
+          this.revealedBlanks.clear();
+          void this.render();
+        }).catch((error) => new import_obsidian2.Notice(String(error)));
+      }).open();
+    });
+    if (card.kind === "image") controls.createEl("button", { text: "\u8C03\u6574\u65B9\u5757" }).addEventListener("click", () => {
+      void this.editImageBoxes();
+    });
+    controls.createEl("button", { text: "\u5220\u9664" }).addEventListener("click", () => {
+      new DeleteFlashcardModal(this.app, card, () => {
+        void this.host.deleteCard(card.id).then(() => this.close()).catch((error) => new import_obsidian2.Notice(String(error)));
+      }).open();
+    });
   }
-  async editImageBoxes(card) {
+  async editImageBoxes() {
     var _a;
-    const source = this.app.vault.getAbstractFileByPath((_a = card.imagePath) != null ? _a : "");
+    const card = this.card, source = this.app.vault.getAbstractFileByPath((_a = card.imagePath) != null ? _a : "");
     if (!(source instanceof import_obsidian2.TFile)) {
-      new import_obsidian2.Notice("\u627E\u4E0D\u5230\u539F\u56FE\uFF0C\u65E0\u6CD5\u8C03\u6574\u65B9\u5757\u3002");
+      new import_obsidian2.Notice("\u627E\u4E0D\u5230\u539F\u56FE\u3002");
       return;
     }
     const data = await this.app.vault.readBinary(source);
     const type = source.extension === "png" ? "image/png" : source.extension === "webp" ? "image/webp" : "image/jpeg";
-    const file = new File([data], card.question, { type });
-    new ImageOcclusionModal(this.app, file, (title, boxes) => {
-      void this.host.updateCard(card.id, {
-        question: title,
-        answer: card.answer,
-        deck: card.deck,
-        tags: card.tags,
-        occlusions: boxes
-      }).catch((error) => new import_obsidian2.Notice(error instanceof Error ? error.message : "\u4FDD\u5B58\u65B9\u5757\u5931\u8D25\u3002"));
-    }, card.occlusions).open();
+    new ImageOcclusionModal(this.app, new File([data], source.name, { type }), (title, boxes) => {
+      void this.host.updateCard(card.id, { question: title || card.question, answer: card.answer, deck: card.deck, tags: card.tags, color: card.color, occlusions: boxes }).then(() => {
+        this.revealedBlanks.clear();
+        void this.render();
+      }).catch((error) => new import_obsidian2.Notice(String(error)));
+    }, card.occlusions, card.question).open();
   }
   async renderCloze(card, target, cardEl) {
     var _a, _b, _c, _d;
@@ -718,7 +943,7 @@ var ReviewView = class extends import_obsidian2.ItemView {
       const index = answers.push(answer) - 1;
       return `KRBLANKTOKEN${index}END`;
     });
-    await import_obsidian2.MarkdownRenderer.render(this.app, source, target, (_b = (_a = card.source) == null ? void 0 : _a.path) != null ? _b : "", this);
+    await import_obsidian2.MarkdownRenderer.render(this.app, source, target, (_b = (_a = card.source) == null ? void 0 : _a.path) != null ? _b : "", this.component);
     const nodes = [];
     const walker = document.createTreeWalker(target, NodeFilter.SHOW_TEXT);
     while (walker.nextNode()) nodes.push(walker.currentNode);
@@ -788,137 +1013,23 @@ var ReviewView = class extends import_obsidian2.ItemView {
   }
   ratingButton(parent, text, rating, card) {
     const button = parent.createEl("button", { text, cls: `kr-rating-${rating}` });
-    button.addEventListener("click", async () => {
-      await this.host.rateCard(card.id, rating);
-      this.revealed = false;
-      this.revealedBlanks.clear();
-      this.activeCardId = "";
-      this.index = 0;
-      await this.render();
+    button.addEventListener("click", () => {
+      parent.querySelectorAll("button").forEach((el) => {
+        el.disabled = true;
+      });
+      void this.host.rateCard(card.id, rating).then(() => {
+        var _a;
+        this.close();
+        (_a = this.afterRating) == null ? void 0 : _a.call(this);
+      }).catch((error) => {
+        new import_obsidian2.Notice(String(error));
+        parent.querySelectorAll("button").forEach((el) => {
+          el.disabled = false;
+        });
+      });
     });
-  }
-  renderFilters(parent) {
-    const all = this.host.getAllCards();
-    const filters = parent.createEl("details", { cls: "kr-filters" });
-    filters.createEl("summary", { text: "\u7B5B\u9009" });
-    const grid = filters.createDiv({ cls: "kr-filter-grid" });
-    this.selectFilter(grid, "\u5361\u7EC4", unique(all.map((card) => card.deck)), this.filters.deck, (value) => {
-      this.filters.deck = value;
-    });
-    this.selectFilter(grid, "\u6765\u6E90", unique(all.map((card) => {
-      var _a;
-      return (_a = card.source) == null ? void 0 : _a.path;
-    }).filter(isString)), this.filters.source, (value) => {
-      this.filters.source = value;
-    });
-    this.selectFilter(grid, "\u6807\u7B7E", unique(all.flatMap((card) => card.tags)), this.filters.tag, (value) => {
-      this.filters.tag = value;
-    });
-    this.selectFilter(grid, "\u989C\u8272", unique(all.map((card) => card.color)), this.filters.color, (value) => {
-      this.filters.color = value;
-    });
-  }
-  selectFilter(parent, label, options, value, setValue) {
-    const wrapper = parent.createDiv();
-    wrapper.createEl("label", { text: label });
-    const select = wrapper.createEl("select");
-    select.createEl("option", { text: "\u5168\u90E8", value: "" });
-    for (const option of options) select.createEl("option", { text: option, value: option });
-    select.value = value;
-    select.addEventListener("change", () => {
-      setValue(select.value);
-      this.index = 0;
-      this.revealed = false;
-      this.activeCardId = "";
-      this.revealedBlanks.clear();
-      void this.render();
-    });
-  }
-  renderStats(parent) {
-    var _a, _b;
-    const section = parent.createDiv({ cls: "kr-stats" });
-    section.createEl("h3", { text: "\u672C\u6708\u590D\u4E60\u65E5\u5386" });
-    const now = /* @__PURE__ */ new Date();
-    const year = now.getFullYear();
-    const month = now.getMonth();
-    const first = new Date(year, month, 1);
-    const days = new Date(year, month + 1, 0).getDate();
-    const counts = /* @__PURE__ */ new Map();
-    for (const log of this.host.getReviewLog()) {
-      const date = new Date(log.reviewedAt);
-      if (date.getFullYear() === year && date.getMonth() === month) counts.set(date.getDate(), ((_a = counts.get(date.getDate())) != null ? _a : 0) + 1);
-    }
-    const total = Array.from(counts.values()).reduce((sum, value) => sum + value, 0);
-    section.createEl("p", { text: `${year}\u5E74${month + 1}\u6708 \xB7 \u5DF2\u590D\u4E60 ${total} \u6B21`, cls: "kr-stat-summary" });
-    const calendar = section.createDiv({ cls: "kr-calendar" });
-    for (const day of ["\u4E00", "\u4E8C", "\u4E09", "\u56DB", "\u4E94", "\u516D", "\u65E5"]) calendar.createDiv({ text: day, cls: "kr-weekday" });
-    const offset = (first.getDay() + 6) % 7;
-    for (let blank = 0; blank < offset; blank += 1) calendar.createDiv({ cls: "kr-day kr-day-empty" });
-    for (let day = 1; day <= days; day += 1) {
-      const count = (_b = counts.get(day)) != null ? _b : 0;
-      const el = calendar.createDiv({ cls: `kr-day ${count ? "is-reviewed" : ""}` });
-      el.createSpan({ text: String(day) });
-      if (count) {
-        const strength = Math.min(84, 18 + count * 11);
-        el.style.background = `color-mix(in srgb, var(--interactive-accent) ${strength}%, var(--background-primary))`;
-        el.style.color = strength >= 57 ? "var(--text-on-accent)" : "var(--text-normal)";
-        el.setAttribute("aria-label", `${day} \u65E5\uFF1A\u590D\u4E60 ${count} \u6B21`);
-        el.title = `${day} \u65E5\uFF1A\u590D\u4E60 ${count} \u6B21`;
-      }
-      if (startOfDay(new Date(year, month, day).getTime()) === startOfDay()) el.addClass("is-today");
-    }
   }
 };
-function unique(values) {
-  return Array.from(new Set(values)).sort((a, b) => a.localeCompare(b));
-}
-function isString(value) {
-  return typeof value === "string" && value.length > 0;
-}
-
-// src/scheduler.ts
-function scheduleReview(card, rating, settings, now = Date.now()) {
-  var _a, _b, _c;
-  const next = { ...card, updatedAt: now };
-  if (card.algorithm === "fixed") {
-    const intervals = settings.fixedIntervals.length ? settings.fixedIntervals : [0, 1, 2, 4, 7, 15, 30];
-    if (rating === "again") {
-      next.fixedStep = 0;
-      next.intervalDays = 0;
-      next.dueAt = now + 10 * 60 * 1e3;
-    } else if (rating === "hard") {
-      const step = Math.max(1, Math.min(card.fixedStep, intervals.length - 1));
-      const days = Math.max(1, (_a = intervals[step]) != null ? _a : 1);
-      next.fixedStep = step;
-      next.intervalDays = days;
-      next.dueAt = addDays(now, days);
-    } else {
-      const step = Math.min(card.fixedStep + 1, intervals.length - 1);
-      const days = (_c = (_b = intervals[step]) != null ? _b : intervals[intervals.length - 1]) != null ? _c : 30;
-      next.fixedStep = step;
-      next.intervalDays = days;
-      next.dueAt = addDays(now, days);
-    }
-    return next;
-  }
-  if (rating === "again") {
-    next.repetitions = 0;
-    next.intervalDays = 1;
-    next.ease = Math.max(1.3, card.ease - 0.2);
-  } else if (rating === "hard") {
-    next.repetitions = card.repetitions + 1;
-    next.intervalDays = Math.max(1, Math.round(Math.max(1, card.intervalDays) * 1.2));
-    next.ease = Math.max(1.3, card.ease - 0.15);
-  } else {
-    next.repetitions = card.repetitions + 1;
-    if (next.repetitions === 1) next.intervalDays = 1;
-    else if (next.repetitions === 2) next.intervalDays = 3;
-    else next.intervalDays = Math.max(1, Math.round(Math.max(1, card.intervalDays) * card.ease));
-    next.ease = Math.min(3.2, card.ease + 0.05);
-  }
-  next.dueAt = addDays(now, next.intervalDays);
-  return next;
-}
 
 // src/settings.ts
 var import_obsidian3 = require("obsidian");
@@ -1103,12 +1214,13 @@ var KnowledgeReviewPlugin = class extends import_obsidian4.Plugin {
     this.app.workspace.detachLeavesOfType(REVIEW_VIEW_TYPE);
   }
   async loadStore() {
-    var _a;
+    var _a, _b, _c;
     const saved = await this.loadData();
     this.store = {
       settings: { ...DEFAULT_SETTINGS, ...(_a = saved == null ? void 0 : saved.settings) != null ? _a : {} },
       cards: Array.isArray(saved == null ? void 0 : saved.cards) ? saved.cards : [],
-      reviewLog: Array.isArray(saved == null ? void 0 : saved.reviewLog) ? saved.reviewLog : []
+      reviewLog: Array.isArray(saved == null ? void 0 : saved.reviewLog) ? saved.reviewLog : [],
+      imageTitleCounter: (_c = saved == null ? void 0 : saved.imageTitleCounter) != null ? _c : Math.max(0, ...((_b = saved == null ? void 0 : saved.cards) != null ? _b : []).filter((c) => c.kind === "image" && /^\d+$/.test(c.question)).map((c) => Number(c.question)))
     };
   }
   async saveStore() {
@@ -1124,6 +1236,83 @@ var KnowledgeReviewPlugin = class extends import_obsidian4.Plugin {
   getReviewLog() {
     return this.store.reviewLog;
   }
+  getSettings() {
+    return this.store.settings;
+  }
+  selectionSource(editor, file) {
+    const at = editor.getCursor("from");
+    return { path: file.path, text: editor.getSelection(), line: at.line, ch: at.ch, heading: nearestHeading(editor, at.line) };
+  }
+  async imageNoteSource(imagePath, title, activeNote) {
+    let note = activeNote;
+    if (!note) {
+      await this.ensureFolder("Knowledge Review");
+      const path = "Knowledge Review/\u56FE\u7247\u95EA\u5361\u6765\u6E90.md";
+      const existing = this.app.vault.getAbstractFileByPath(path);
+      note = existing instanceof import_obsidian4.TFile ? existing : await this.app.vault.create(path, "# \u56FE\u7247\u95EA\u5361\u6765\u6E90\n");
+    }
+    const blockId = uid("krimage");
+    await this.app.vault.append(note, `
+
+## ${title.replace(/\n/g, " ")}
+
+![[${imagePath}]]
+^${blockId}
+`);
+    return { path: note.path, blockId };
+  }
+  async openCardSource(card) {
+    var _a, _b, _c, _d, _e;
+    if (card.kind === "image" && (!card.source || card.source.path === card.imagePath)) {
+      card.source = await this.imageNoteSource((_a = card.imagePath) != null ? _a : "", card.question, null);
+      await this.saveStore();
+    }
+    const source = card.source;
+    if (!source) {
+      new import_obsidian4.Notice("\u8FD9\u5F20\u5361\u6CA1\u6709\u8BB0\u5F55\u6765\u6E90\u3002");
+      return;
+    }
+    const file = this.app.vault.getAbstractFileByPath(source.path);
+    if (!(file instanceof import_obsidian4.TFile) || file.extension !== "md") {
+      new import_obsidian4.Notice("\u627E\u4E0D\u5230\u6765\u6E90\u7B14\u8BB0\u3002");
+      return;
+    }
+    const text = await this.app.vault.read(file);
+    const leaf = this.app.workspace.getLeaf(true);
+    await leaf.setViewState({ type: "markdown", active: true, state: { file: file.path, mode: "source" } });
+    if (!(leaf.view instanceof import_obsidian4.MarkdownView)) return;
+    let at = -1;
+    let length = 0;
+    if (source.blockId) at = text.indexOf(`^${source.blockId}`);
+    if (source.marker) at = text.indexOf(`<!--kr:start:${source.marker}-->`);
+    const quote = source.text || (card.kind === "cloze" ? card.question.replace(/\{\{c\d+::([\s\S]*?)\}\}/g, "==$1==") : "");
+    if (at < 0 && quote) {
+      const expected = text.split("\n").slice(0, (_b = source.line) != null ? _b : 0).join("\n").length + ((_c = source.ch) != null ? _c : 0);
+      const matches = [];
+      let found = text.indexOf(quote);
+      while (found >= 0) {
+        matches.push(found);
+        found = text.indexOf(quote, found + Math.max(1, quote.length));
+      }
+      matches.sort((a, b) => Math.abs(a - expected) - Math.abs(b - expected));
+      at = (_d = matches[0]) != null ? _d : -1;
+      length = quote.length;
+    }
+    if (at >= 0) {
+      const from = leaf.view.editor.offsetToPos(at);
+      const to = leaf.view.editor.offsetToPos(at + length);
+      leaf.view.editor.setSelection(from, to);
+      leaf.view.editor.scrollIntoView({ from, to }, true);
+    } else if (source.line !== void 0) {
+      const pos = { line: Math.min(source.line, leaf.view.editor.lineCount() - 1), ch: (_e = source.ch) != null ? _e : 0 };
+      leaf.view.editor.setCursor(pos);
+      leaf.view.editor.scrollIntoView({ from: pos, to: pos }, true);
+      new import_obsidian4.Notice("\u539F\u6587\u5DF2\u6539\u53D8\uFF0C\u5DF2\u8DF3\u5230\u521B\u5EFA\u65F6\u8BB0\u5F55\u7684\u884C\u3002");
+    } else {
+      new import_obsidian4.Notice("\u65E7\u5361\u6CA1\u6709\u51C6\u786E\u4F4D\u7F6E\u3002\u53EF\u5728\u7F16\u8F91\u7A97\u53E3\u586B\u5199\u6765\u6E90\u539F\u6587\u7247\u6BB5\uFF0C\u518D\u70B9\u51FB\u6765\u6E90\u3002", 8e3);
+    }
+    this.app.workspace.revealLeaf(leaf);
+  }
   async rateCard(cardId, rating) {
     const index = this.store.cards.findIndex((card) => card.id === cardId);
     if (index < 0) return;
@@ -1134,16 +1323,19 @@ var KnowledgeReviewPlugin = class extends import_obsidian4.Plugin {
     await this.saveStore();
   }
   async updateCard(cardId, changes) {
-    var _a;
+    var _a, _b;
     const card = this.store.cards.find((item) => item.id === cardId);
     if (!card) throw new Error("\u627E\u4E0D\u5230\u95EA\u5361\u3002");
     if (!changes.question.trim() || !changes.deck.trim()) throw new Error("\u6807\u9898\u548C\u5361\u7EC4\u4E0D\u80FD\u4E3A\u7A7A\u3002");
     card.question = changes.question.trim();
     card.answer = changes.answer.trim();
+    card.title = ((_a = changes.title) == null ? void 0 : _a.trim()) || void 0;
+    if (changes.color) card.color = changes.color;
+    if (changes.source) card.source = changes.source;
     if (card.kind !== "image") card.kind = /\{\{c\d+::[^{}]+\}\}/.test(card.question) ? "cloze" : "qa";
     card.deck = changes.deck.trim();
     card.tags = changes.tags;
-    if (card.kind === "image" && ((_a = changes.occlusions) == null ? void 0 : _a.length)) card.occlusions = changes.occlusions;
+    if (card.kind === "image" && ((_b = changes.occlusions) == null ? void 0 : _b.length)) card.occlusions = changes.occlusions;
     card.updatedAt = Date.now();
     await this.saveStore();
   }
@@ -1211,6 +1403,7 @@ var KnowledgeReviewPlugin = class extends import_obsidian4.Plugin {
       return;
     }
     const selected = editor.getSelection();
+    const source = this.selectionSource(editor, file);
     if (!selected.trim()) {
       new import_obsidian4.Notice("\u8BF7\u5148\u9009\u62E9\u5305\u542B\u9AD8\u4EAE\u5185\u5BB9\u7684\u4EFB\u610F\u8303\u56F4\u3002");
       return;
@@ -1229,7 +1422,7 @@ var KnowledgeReviewPlugin = class extends import_obsidian4.Plugin {
       return;
     }
     new FlashcardMetaModal(this.app, this.defaultMeta(), "\u521B\u5EFA\u591A\u6316\u7A7A\u95EA\u5361", false, (meta) => {
-      this.addCards([{ question, answer: terms.map((term) => `- ${term}`).join("\n"), selected: true }], meta, { path: file.path });
+      this.addCards([{ question, answer: terms.map((term) => `- ${term}`).join("\n"), selected: true }], meta, source);
       new import_obsidian4.Notice(`\u5DF2\u521B\u5EFA\u5305\u542B ${terms.length} \u4E2A\u6316\u7A7A\u7684\u95EA\u5361\u3002`);
     }).open();
   }
@@ -1239,6 +1432,7 @@ var KnowledgeReviewPlugin = class extends import_obsidian4.Plugin {
       return;
     }
     const material = editor.getSelection().trim();
+    const source = this.selectionSource(editor, file);
     if (!material) {
       new import_obsidian4.Notice("\u8BF7\u5148\u9009\u4E2D\u7528\u4E8E\u5236\u4F5C\u6316\u7A7A\u5361\u7684\u4EFB\u610F\u5185\u5BB9\u3002");
       return;
@@ -1249,7 +1443,7 @@ var KnowledgeReviewPlugin = class extends import_obsidian4.Plugin {
       new ClozePreviewModal(this.app, material, terms, (selectedTerms) => {
         const draft = buildClozeDraft(material, selectedTerms);
         new FlashcardMetaModal(this.app, this.defaultMeta(), "\u521B\u5EFA AI \u591A\u6316\u7A7A\u95EA\u5361", false, (meta) => {
-          this.addCards([draft], meta, { path: file.path });
+          this.addCards([draft], meta, source);
           new import_obsidian4.Notice(`\u5DF2\u521B\u5EFA\u5305\u542B ${selectedTerms.length} \u4E2A\u6316\u7A7A\u7684\u95EA\u5361\u3002`);
         }).open();
       }).open();
@@ -1265,7 +1459,7 @@ var KnowledgeReviewPlugin = class extends import_obsidian4.Plugin {
       new import_obsidian4.Notice("\u8BF7\u5148\u9009\u4E2D\u7528\u4E8E\u51FA\u9898\u7684\u4EFB\u610F\u5185\u5BB9\u3002");
       return;
     }
-    const source = { path: file.path, heading: nearestHeading(editor, editor.getCursor("from").line) };
+    const source = this.selectionSource(editor, file);
     new FlashcardMetaModal(this.app, this.defaultMeta(), "AI \u81EA\u52A8\u751F\u6210\u95EE\u7B54\u95EA\u5361", true, (meta) => {
       new import_obsidian4.Notice("\u6B63\u5728\u751F\u6210\u95EA\u5361\u2026", 5e3);
       void generateFlashcards(this.store.settings, material, meta.count).then((drafts) => {
@@ -1287,12 +1481,14 @@ var KnowledgeReviewPlugin = class extends import_obsidian4.Plugin {
     };
   }
   openImageOcclusionCreator() {
+    var _a, _b;
+    const activeNote = (_b = (_a = this.app.workspace.getActiveViewOfType(import_obsidian4.MarkdownView)) == null ? void 0 : _a.file) != null ? _b : null;
     const input = document.createElement("input");
     input.type = "file";
     input.accept = "image/png,image/jpeg,image/webp";
     input.onchange = () => {
-      var _a;
-      const file = (_a = input.files) == null ? void 0 : _a[0];
+      var _a2;
+      const file = (_a2 = input.files) == null ? void 0 : _a2[0];
       if (!file) return;
       if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
         new import_obsidian4.Notice("\u8BF7\u9009\u62E9 PNG\u3001JPEG \u6216 WebP \u622A\u56FE\u3002");
@@ -1304,28 +1500,33 @@ var KnowledgeReviewPlugin = class extends import_obsidian4.Plugin {
       }
       new ImageOcclusionModal(this.app, file, (title, boxes) => {
         new FlashcardMetaModal(this.app, { ...this.defaultMeta(), deck: "\u79D1\u76EE\u4E00", tags: "\u79D1\u76EE\u4E00" }, "\u4FDD\u5B58\u56FE\u7247\u6316\u7A7A\u95EA\u5361", false, (meta) => {
-          void this.addImageCard(file, title, boxes, meta).catch((error) => new import_obsidian4.Notice(error instanceof Error ? error.message : "\u56FE\u7247\u95EA\u5361\u4FDD\u5B58\u5931\u8D25\u3002", 1e4));
+          void this.addImageCard(file, title, boxes, meta, activeNote).catch((error) => new import_obsidian4.Notice(error instanceof Error ? error.message : "\u56FE\u7247\u95EA\u5361\u4FDD\u5B58\u5931\u8D25\u3002", 1e4));
         }).open();
       }).open();
     };
     input.click();
   }
-  async addImageCard(file, title, boxes, meta) {
+  async addImageCard(file, title, boxes, meta, activeNote) {
+    var _a;
     const folder = "Knowledge Review/\u56FE\u7247\u6316\u7A7A";
     await this.ensureFolder(folder);
     const suffix = file.type === "image/png" ? "png" : file.type === "image/webp" ? "webp" : "jpg";
     const path = `${folder}/${uid("image")}.${suffix}`;
     const image = await this.app.vault.createBinary(path, await file.arrayBuffer());
     const now = Date.now();
+    const number = ((_a = this.store.imageTitleCounter) != null ? _a : 0) + 1;
+    if (!title.trim()) this.store.imageTitleCounter = number;
+    const displayTitle = title.trim() || String(number);
+    const source = await this.imageNoteSource(image.path, displayTitle, activeNote);
     this.store.cards.push({
       id: uid("card"),
       kind: "image",
-      question: title.trim() || file.name,
+      question: displayTitle,
       answer: "",
       deck: meta.deck.trim(),
       tags: normalizeTags(meta.tags),
       color: meta.color,
-      source: { path: image.path },
+      source,
       imagePath: image.path,
       occlusions: boxes,
       algorithm: meta.algorithm,
