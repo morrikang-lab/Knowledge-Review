@@ -161,3 +161,55 @@
 .kr-color-blue { --kr-accent: var(--kr-blue); }
 .kr-review-box:hover, .kr-review-box:focus, .kr-review-box:active { background: #47649f; opacity: 1; }
 .kr-review-box.is-revealed, .kr-review-box.is-revealed:hover, .kr-review-box.is-revealed:focus, .kr-review-box.is-revealed:active { background: transparent; opacity: 1; }
+
+/* Compact, touch-friendly review and document editor */
+.kr-review-view, .kr-detail-modal, .kr-edit-modal { font-size: .92em; }
+.kr-review-view h2 { font-size: 1.3em; }
+.kr-review-view .kr-stats h3 { font-size: 1.15em; }
+.kr-detail-modal { width: min(980px, 94vw); max-height: 90vh; }
+.kr-detail-modal .modal-content { display: flex; flex-direction: column; min-height: 0; }
+.kr-detail-modal .kr-detail-toolbar { display: flex; align-items: center; gap: 8px; padding: 0 4px; }
+.kr-detail-toolbar .kr-detail-edit { margin-left: auto; }
+.kr-favorite-toggle, .kr-favorite-shortcut { color: var(--interactive-accent); font-size: 1.35em; border-radius: 999px; }
+.kr-favorite-toggle.is-favorite { color: var(--color-red); }
+.kr-detail-modal .kr-flashcard { flex: 1; overflow: auto; background: transparent; box-shadow: none; border: 0; margin: 6px 0; padding: 14px; }
+.kr-detail-modal .kr-rating-actions { position: sticky; bottom: 0; z-index: 5; padding: 12px; margin-top: 6px; background: color-mix(in srgb, var(--background-primary) 93%, transparent); border: 1px solid var(--background-modifier-border); border-radius: 22px; box-shadow: 0 12px 32px rgba(0,0,0,.14); backdrop-filter: blur(18px); }
+.kr-detail-modal .kr-rating-actions button { height: auto; min-height: 54px; white-space: pre-line; border: 0; border-radius: 16px; font-weight: 700; line-height: 1.35; color: #fff; }
+.kr-detail-modal .kr-rating-good { background: #19bca8; }
+.kr-detail-modal .kr-rating-hard { background: #ca772b; }
+.kr-detail-modal .kr-rating-again { background: #e43b55; }
+.kr-detail-modal .kr-rating-good:hover { background: #0caa98; }
+.kr-detail-modal .kr-rating-hard:hover { background: #b66a25; }
+.kr-detail-modal .kr-rating-again:hover { background: #ca304c; }
+.kr-detail-modal .kr-inline-blank { border: 0; border-bottom: 2px solid var(--interactive-accent); border-radius: 0; background: transparent; color: transparent; min-width: 4em; }
+.kr-detail-modal .kr-inline-blank.is-revealed { color: var(--text-normal); background: color-mix(in srgb, var(--interactive-accent) 18%, var(--background-primary)); }
+.kr-detail-modal .kr-inline-blank:not(.is-revealed)::before { content: '＿＿＿＿'; color: var(--interactive-accent); }
+.kr-detail-modal .kr-inline-blank:not(.is-revealed) { font-size: 0; }
+.kr-detail-modal .kr-inline-blank:not(.is-revealed)::before { font-size: 14px; }
+.kr-detail-modal .kr-review-image { display: block; width: fit-content; margin: 18px 0; }
+.kr-detail-modal .kr-review-image img { max-height: 45vh; }
+.kr-detail-modal .kr-detail-controls { padding: 0 14px; }
+.kr-edit-modal { width: min(1120px, 94vw); max-height: 90vh; }
+.kr-edit-modal .kr-document-toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 14px; }
+.kr-edit-modal .kr-document-toolbar button { background: color-mix(in srgb, var(--interactive-accent) 19%, var(--background-primary)); color: var(--text-normal); border-radius: 14px; }
+.kr-edit-modal .kr-document-editor { width: min(860px, 100%); min-height: 35vh; margin: 0 auto; padding: 14px; background: var(--background-secondary); border-radius: 18px; }
+.kr-edit-modal .kr-document-editor input.kr-document-title, .kr-edit-modal .kr-document-editor textarea { display: block; width: 100%; background: color-mix(in srgb, var(--background-modifier-border) 48%, var(--background-secondary)); color: var(--text-normal); border: 0; border-radius: 10px; box-shadow: none; padding: 16px; margin: 0 0 10px; resize: vertical; line-height: 1.65; font-family: var(--font-text); }
+.kr-edit-modal .kr-document-editor input.kr-document-title { font-size: 1.35em; font-weight: 600; }
+.kr-edit-modal .kr-document-editor textarea.kr-document-body { min-height: 35vh; }
+.kr-edit-modal .kr-document-editor textarea.kr-document-answer { min-height: 110px; }
+.kr-document-preview { min-height: 35vh; padding: 16px; }
+.kr-document-image-row { margin: 10px 0; padding: 10px; border-radius: 12px; background: var(--background-primary); }
+.kr-document-image-row img { display: block; max-width: 100%; max-height: 280px; object-fit: contain; }
+.kr-document-image-row button { margin: 8px 8px 0 0; }
+.kr-edit-meta { margin: 16px 0; }
+.kr-edit-meta summary { cursor: pointer; padding: 10px; }
+.kr-document-footer { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 0; }
+.modal-container:has(.kr-detail-modal) .modal-bg, .modal-container:has(.kr-edit-modal) .modal-bg { background: color-mix(in srgb, var(--background-primary) 36%, transparent); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); }
+.kr-detail-modal, .kr-edit-modal { background: color-mix(in srgb, var(--background-primary) 90%, transparent); backdrop-filter: blur(22px); -webkit-backdrop-filter: blur(22px); border-radius: 24px; }
+.kr-review-view button, .kr-detail-modal button, .kr-edit-modal button, .kr-tag-section summary { transition: transform .24s cubic-bezier(.2,.8,.2,1), box-shadow .24s cubic-bezier(.2,.8,.2,1), background-color .24s ease, opacity .24s ease; }
+.kr-review-view button:active, .kr-detail-modal button:active, .kr-edit-modal button:active { transform: scale(.96); }
+.kr-tag-section[open] .kr-tile-grid { animation: kr-section-in .28s cubic-bezier(.2,.8,.2,1); }
+.kr-detail-modal, .kr-edit-modal { animation: kr-modal-in .3s cubic-bezier(.2,.8,.2,1); }
+@keyframes kr-section-in { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes kr-modal-in { from { opacity: 0; transform: translateY(14px) scale(.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@media (prefers-reduced-motion: reduce) { .kr-review-view button, .kr-detail-modal button, .kr-edit-modal button, .kr-tag-section summary { transition: none; } .kr-tag-section[open] .kr-tile-grid, .kr-detail-modal, .kr-edit-modal { animation: none; } }

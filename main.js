@@ -378,9 +378,10 @@ var ManualExcerptModal = class extends import_obsidian.Modal {
   }
 };
 var ImageOcclusionModal = class extends import_obsidian.Modal {
-  constructor(app, file, onSubmit, initialBoxes = [], initialTitle = "") {
+  constructor(app, file, onSubmit, initialBoxes = [], initialTitle = "", showTitle = true) {
     super(app);
     this.onSubmit = onSubmit;
+    this.showTitle = showTitle;
     this.url = URL.createObjectURL(file);
     this.title = initialTitle;
     this.boxes = initialBoxes.map((box) => ({ ...box }));
@@ -389,7 +390,7 @@ var ImageOcclusionModal = class extends import_obsidian.Modal {
     this.modalEl.addClass("kr-image-editor-modal");
     this.setTitle("\u7F16\u8F91\u56FE\u7247\u6316\u7A7A\u65B9\u5757");
     this.contentEl.createEl("p", { text: "\u7A7A\u767D\u5904\u62D6\u52A8\u753B\u6846\uFF1B\u70B9\u51FB\u65B9\u5757\u9009\u4E2D\uFF0C\u62D6\u52A8\u4E2D\u95F4\u79FB\u52A8\uFF0C\u62D6\u52A8\u56DB\u89D2\u7F29\u653E\u3002", cls: "setting-item-description" });
-    new import_obsidian.Setting(this.contentEl).setName("\u56FE\u7247\u5361\u6807\u9898").setDesc("\u624B\u52A8\u586B\u5199\uFF1B\u7559\u7A7A\u81EA\u52A8\u4F7F\u7528 1\u30012\u30013\u2026\u2026").addText((text) => text.setValue(this.title).onChange((value) => {
+    if (this.showTitle) new import_obsidian.Setting(this.contentEl).setName("\u56FE\u7247\u5361\u6807\u9898").setDesc("\u624B\u52A8\u586B\u5199\uFF1B\u7559\u7A7A\u81EA\u52A8\u4F7F\u7528 1\u30012\u30013\u2026\u2026").addText((text) => text.setValue(this.title).onChange((value) => {
       this.title = value;
     }));
     const stage = this.contentEl.createDiv({ cls: "kr-image-stage" });
@@ -491,11 +492,13 @@ var ImageOcclusionModal = class extends import_obsidian.Modal {
   }
 };
 var FlashcardEditModal = class extends import_obsidian.Modal {
-  constructor(app, card, onSubmit) {
-    var _a, _b;
+  constructor(app, card, onSubmit, importImage) {
+    var _a, _b, _c;
     super(app);
     this.card = card;
     this.onSubmit = onSubmit;
+    this.importImage = importImage;
+    this.component = new import_obsidian.Component();
     this.question = card.question;
     this.answer = card.answer;
     this.deck = card.deck;
@@ -503,56 +506,168 @@ var FlashcardEditModal = class extends import_obsidian.Modal {
     this.title = cardTitle(card);
     this.color = card.color;
     this.sourceText = (_b = (_a = card.source) == null ? void 0 : _a.text) != null ? _b : "";
+    this.images = ((_c = card.images) != null ? _c : []).map((image) => ({ path: image.path, occlusions: image.occlusions.map((box) => ({ ...box })) }));
   }
   onOpen() {
     this.modalEl.addClass("kr-edit-modal");
+    this.component.load();
     this.setTitle("\u7F16\u8F91\u95EA\u5361");
-    if (this.card.kind !== "image") new import_obsidian.Setting(this.contentEl).setName("\u5173\u952E\u8BCD\u6807\u9898").addText((input) => input.setValue(this.title).onChange((value) => {
-      this.title = value;
+    const bar = this.contentEl.createDiv({ cls: "kr-document-toolbar" });
+    const previewButton = bar.createEl("button", { text: "\u9884\u89C8" });
+    const clozeButton = bar.createEl("button", { text: "\uFF0B \u6587\u5B57\u6316\u7A7A" });
+    const imageButton = bar.createEl("button", { text: "\uFF0B \u63D2\u5165\u56FE\u7247" });
+    const fileInput = bar.createEl("input", { type: "file", attr: { accept: "image/png,image/jpeg,image/webp,image/gif" } });
+    fileInput.style.display = "none";
+    imageButton.addEventListener("click", () => fileInput.click());
+    const document2 = this.contentEl.createDiv({ cls: "kr-document-editor" });
+    const heading = document2.createEl("input", { type: "text", cls: "kr-document-title", attr: { "aria-label": this.card.kind === "image" ? "\u56FE\u7247\u6807\u9898" : "\u95EA\u5361\u5173\u952E\u8BCD\u6807\u9898" } });
+    heading.value = this.card.kind === "image" ? this.question : this.title;
+    heading.addEventListener("input", () => {
+      if (this.card.kind === "image") this.question = heading.value;
+      else this.title = heading.value;
+    });
+    const textArea = document2.createEl("textarea", { cls: "kr-document-body", attr: { "aria-label": "\u95EA\u5361\u6587\u5B57\u5185\u5BB9", placeholder: "\u5728\u8FD9\u91CC\u76F4\u63A5\u7F16\u8F91\u95EA\u5361\u5185\u5BB9\u2026\u2026" } });
+    textArea.value = this.card.kind === "image" ? this.answer : this.question;
+    textArea.addEventListener("input", () => {
+      if (this.card.kind === "image") this.answer = textArea.value;
+      else this.question = textArea.value;
+    });
+    const answerArea = document2.createEl("textarea", { cls: "kr-document-answer", attr: { "aria-label": "\u7B54\u6848", placeholder: "\u7B54\u6848\uFF08\u95EE\u7B54\u5361\uFF09" } });
+    answerArea.value = this.answer;
+    answerArea.addEventListener("input", () => {
+      this.answer = answerArea.value;
+    });
+    if (this.card.kind === "image" || this.card.kind === "cloze") answerArea.hide();
+    const preview = document2.createDiv({ cls: "kr-document-preview markdown-rendered" });
+    preview.hide();
+    previewButton.addEventListener("click", () => {
+      var _a, _b;
+      const showing = preview.style.display !== "none";
+      if (showing) {
+        preview.hide();
+        textArea.show();
+        if (this.card.kind === "qa") answerArea.show();
+        previewButton.setText("\u9884\u89C8");
+      } else {
+        preview.show();
+        textArea.hide();
+        answerArea.hide();
+        previewButton.setText("\u7F16\u8F91");
+        preview.empty();
+        void import_obsidian.MarkdownRenderer.render(this.app, this.card.kind === "image" ? this.answer : this.question.replace(/\{\{c\d+::([\s\S]*?)\}\}/g, "____"), preview, (_b = (_a = this.card.source) == null ? void 0 : _a.path) != null ? _b : "", this.component);
+      }
+    });
+    clozeButton.addEventListener("click", () => {
+      if (this.card.kind === "image") {
+        new import_obsidian.Notice("\u56FE\u7247\u5361\u8BF7\u4F7F\u7528\u4E0B\u65B9\u7684\u56FE\u7247\u6316\u7A7A\u6309\u94AE\u3002");
+        return;
+      }
+      if (preview.style.display !== "none") previewButton.click();
+      const from = textArea.selectionStart, to = textArea.selectionEnd;
+      if (from === to) {
+        new import_obsidian.Notice("\u5148\u5728\u6B63\u6587\u4E2D\u9009\u4E2D\u8981\u6316\u7A7A\u7684\u6587\u5B57\u3002");
+        textArea.focus();
+        return;
+      }
+      const value = textArea.value.slice(from, to);
+      if (value.includes("{{c")) {
+        new import_obsidian.Notice("\u9009\u533A\u5DF2\u5305\u542B\u6316\u7A7A\u6807\u8BB0\u3002");
+        return;
+      }
+      textArea.setRangeText(`{{c1::${value}}}`, from, to, "end");
+      this.question = textArea.value;
+      textArea.focus();
+    });
+    const gallery = document2.createDiv({ cls: "kr-document-images" });
+    const drawGallery = () => {
+      gallery.empty();
+      this.images.forEach((image, index) => {
+        var _a;
+        const row = gallery.createDiv({ cls: "kr-document-image-row" });
+        const file = image.file ? null : this.app.vault.getAbstractFileByPath(image.path);
+        const src = (_a = image.previewUrl) != null ? _a : file instanceof import_obsidian.TFile ? this.app.vault.getResourcePath(file) : "";
+        if (src) row.createEl("img", { attr: { src, alt: `\u63D2\u5165\u56FE\u7247 ${index + 1}` } });
+        const controls = row.createDiv();
+        controls.createEl("button", { text: `\u753B\u6316\u7A7A\u65B9\u5757\uFF08${image.occlusions.length}\uFF09` }).addEventListener("click", () => {
+          const edit = (binary) => new ImageOcclusionModal(this.app, binary, (_title, boxes) => {
+            image.occlusions = boxes;
+            drawGallery();
+          }, image.occlusions, `\u56FE\u7247 ${index + 1}`, false).open();
+          if (image.file) edit(image.file);
+          else if (file instanceof import_obsidian.TFile) void this.app.vault.readBinary(file).then((data) => edit(new File([data], file.name, { type: `image/${file.extension === "jpg" ? "jpeg" : file.extension}` }))).catch((error) => new import_obsidian.Notice(String(error)));
+        });
+        controls.createEl("button", { text: "\u79FB\u9664\u56FE\u7247" }).addEventListener("click", () => {
+          if (image.previewUrl) URL.revokeObjectURL(image.previewUrl);
+          this.images.splice(index, 1);
+          drawGallery();
+        });
+      });
+    };
+    fileInput.addEventListener("change", () => {
+      var _a;
+      const file = (_a = fileInput.files) == null ? void 0 : _a[0];
+      if (!file) return;
+      if (!/^image\/(png|jpeg|webp|gif)$/.test(file.type)) {
+        new import_obsidian.Notice("\u8BF7\u9009\u62E9\u5E38\u89C1\u56FE\u7247\u683C\u5F0F\u3002");
+        return;
+      }
+      this.images.push({ path: "", occlusions: [], file, previewUrl: URL.createObjectURL(file) });
+      fileInput.value = "";
+      drawGallery();
+    });
+    drawGallery();
+    const meta = this.contentEl.createEl("details", { cls: "kr-edit-meta" });
+    meta.createEl("summary", { text: "\u6807\u7B7E\u3001\u5361\u7EC4\u3001\u989C\u8272\u4E0E\u6765\u6E90" });
+    new import_obsidian.Setting(meta).setName("\u5361\u7EC4").addText((input) => input.setValue(this.deck).onChange((value) => {
+      this.deck = value;
     }));
-    new import_obsidian.Setting(this.contentEl).setName("\u5361\u7247\u5E95\u8272").addDropdown((input) => {
+    new import_obsidian.Setting(meta).setName("\u6807\u7B7E").addText((input) => input.setValue(this.tags).onChange((value) => {
+      this.tags = value;
+    }));
+    new import_obsidian.Setting(meta).setName("\u5361\u7247\u5E95\u8272").addDropdown((input) => {
       for (const color of COLORS) input.addOption(color, colorLabel(color));
       input.setValue(this.color).onChange((value) => {
         this.color = value;
       });
     });
-    this.contentEl.createEl("p", { text: "\u8FD9\u91CC\u53EA\u4FEE\u6539\u95EA\u5361\u5185\u5BB9\uFF0C\u4E0D\u4F1A\u66F4\u6539\u539F\u6587\u7B14\u8BB0\u3002", cls: "setting-item-description" });
-    new import_obsidian.Setting(this.contentEl).setName(this.card.kind === "image" ? "\u56FE\u7247\u5361\u6807\u9898" : "\u95EE\u9898\uFF0F\u6316\u7A7A\u5185\u5BB9").addTextArea((input) => input.setValue(this.question).onChange((value) => {
-      this.question = value;
-    }));
-    if (this.card.kind !== "image") {
-      new import_obsidian.Setting(this.contentEl).setName("\u7B54\u6848").addTextArea((input) => input.setValue(this.answer).onChange((value) => {
-        this.answer = value;
-      }));
-    }
-    new import_obsidian.Setting(this.contentEl).setName("\u5361\u7EC4").addText((input) => input.setValue(this.deck).onChange((value) => {
-      this.deck = value;
-    }));
-    new import_obsidian.Setting(this.contentEl).setName("\u6807\u7B7E").addText((input) => input.setValue(this.tags).onChange((value) => {
-      this.tags = value;
-    }));
-    if (this.card.source && this.card.kind !== "image") new import_obsidian.Setting(this.contentEl).setName("\u6765\u6E90\u539F\u6587\u7247\u6BB5").setDesc("\u4EC5\u7528\u4E8E\u5B9A\u4F4D\uFF1B\u586B\u5199\u539F\u7B14\u8BB0\u4E2D\u786E\u5B9E\u5B58\u5728\u7684\u6587\u5B57\uFF0C\u4E0D\u4F1A\u66F4\u6539\u7B14\u8BB0\u3002").addTextArea((input) => input.setValue(this.sourceText).onChange((value) => {
+    if (this.card.source && this.card.kind !== "image") new import_obsidian.Setting(meta).setName("\u6765\u6E90\u539F\u6587\u7247\u6BB5").setDesc("\u4EC5\u7528\u4E8E\u6765\u6E90\u5B9A\u4F4D\uFF0C\u4E0D\u4F1A\u6539\u52A8\u7B14\u8BB0\u3002").addTextArea((input) => input.setValue(this.sourceText).onChange((value) => {
       this.sourceText = value;
     }));
-    new import_obsidian.Setting(this.contentEl).addButton((button) => button.setCta().setButtonText("\u4FDD\u5B58\u4FEE\u6539").onClick(() => {
+    const footer = this.contentEl.createDiv({ cls: "kr-document-footer" });
+    footer.createEl("button", { text: "\u53D6\u6D88" }).addEventListener("click", () => this.close());
+    const save = footer.createEl("button", { text: "\u4FDD\u5B58\u95EA\u5361", cls: "mod-cta" });
+    save.addEventListener("click", () => {
       if (!this.question.trim() || !this.deck.trim()) {
-        new import_obsidian.Notice("\u6807\u9898\u548C\u5361\u7EC4\u4E0D\u80FD\u4E3A\u7A7A\u3002");
+        new import_obsidian.Notice("\u5185\u5BB9\u548C\u5361\u7EC4\u4E0D\u80FD\u4E3A\u7A7A\u3002");
         return;
       }
-      this.close();
-      this.onSubmit({
-        question: this.question,
-        answer: this.answer,
-        deck: this.deck,
-        tags: this.tags.split(/[,，\s]+/).map((tag) => tag.replace(/^#/, "").trim()).filter(Boolean),
-        occlusions: this.card.occlusions,
-        title: this.card.kind === "image" ? void 0 : this.title,
-        color: this.color,
-        source: this.card.source ? { ...this.card.source, text: this.sourceText || this.card.source.text } : void 0
+      save.disabled = true;
+      void (async () => {
+        const images = [];
+        for (const image of this.images) images.push({ path: image.file ? await this.importImage(image.file) : image.path, occlusions: image.occlusions });
+        await this.onSubmit({
+          question: this.question,
+          answer: this.answer,
+          deck: this.deck,
+          tags: this.tags.split(/[,，\s]+/).map((tag) => tag.replace(/^#/, "").trim()).filter(Boolean),
+          occlusions: this.card.occlusions,
+          title: this.card.kind === "image" ? void 0 : this.title,
+          color: this.color,
+          images,
+          source: this.card.source ? { ...this.card.source, text: this.sourceText || this.card.source.text } : void 0
+        });
+        this.close();
+      })().catch((error) => {
+        new import_obsidian.Notice(`\u4FDD\u5B58\u5931\u8D25\uFF1A${String(error)}`);
+        save.disabled = false;
       });
-    }));
+    });
   }
   onClose() {
+    this.images.forEach((image) => {
+      if (image.previewUrl) URL.revokeObjectURL(image.previewUrl);
+    });
+    this.component.unload();
     this.contentEl.empty();
   }
 };
@@ -691,7 +806,9 @@ var ReviewView = class extends import_obsidian2.ItemView {
     this.render();
   }
   refresh() {
+    const scroll = this.contentEl.scrollTop;
     this.render();
+    this.contentEl.scrollTop = scroll;
   }
   render() {
     const root = this.contentEl;
@@ -701,6 +818,15 @@ var ReviewView = class extends import_obsidian2.ItemView {
     (0, import_obsidian2.setIcon)(header.createSpan(), "brain-circuit");
     header.createEl("h2", { text: "\u95EA\u5361\u590D\u4E60" });
     header.createSpan({ text: String(this.host.getDueCards().length), cls: "kr-due-badge" });
+    const favoriteShortcut = header.createEl("button", { text: `\u2661 ${this.host.getAllCards().filter((card) => card.favorite).length}`, cls: "kr-favorite-shortcut", attr: { "aria-label": "\u6253\u5F00\u6536\u85CF\u6807\u7B7E" } });
+    favoriteShortcut.addEventListener("click", () => {
+      this.expandedTags.add("__favorites");
+      const saved = root.querySelector(".kr-favorites-section");
+      if (saved) {
+        saved.open = true;
+        saved.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }
+    });
     const start = root.createEl("button", { text: "\u5F00\u59CB\u4ECA\u65E5\u590D\u4E60", cls: "mod-cta" });
     start.disabled = !this.host.getDueCards().length;
     start.addEventListener("click", () => this.nextDue());
@@ -728,15 +854,41 @@ var ReviewView = class extends import_obsidian2.ItemView {
         renderGroups();
       });
     }
-    this.renderStats(root);
-    this.renderForecast(root);
     const groups = root.createDiv({ cls: "kr-tag-library" });
     const renderGroups = () => {
-      var _a, _b;
       groups.empty();
       const query = this.query.toLowerCase();
       const cards = this.host.getAllCards().filter((c) => (!this.onlyDue || !c.suspended && c.dueAt <= Date.now()) && (!this.filters.deck || c.deck === this.filters.deck) && (!this.filters.tag || c.tags.includes(this.filters.tag)) && (!this.filters.color || c.color === this.filters.color) && `${cardTitle(c)} ${c.question} ${c.answer} ${c.tags.join(" ")}`.toLowerCase().includes(query));
       cards.sort((a, b) => this.order === "oldest" ? a.createdAt - b.createdAt : this.order === "modified" ? b.updatedAt - a.updatedAt : this.order === "due" ? a.dueAt - b.dueAt : b.createdAt - a.createdAt);
+      const renderTile = (grid, card) => {
+        var _a, _b;
+        const tile = grid.createDiv({ cls: `kr-card-tile kr-color-${card.color}`, attr: { role: "button", tabindex: "0" } });
+        tile.createEl("strong", { text: `${card.favorite ? "\u2665 " : ""}${cardTitle(card)}` });
+        const preview = card.kind === "image" ? `\u56FE\u7247\u6316\u7A7A \xB7 ${(_b = (_a = card.occlusions) == null ? void 0 : _a.length) != null ? _b : 0} \u4E2A\u65B9\u5757` : card.question.replace(/\{\{c\d+::([\s\S]*?)\}\}/g, "\uFF3B\u2026\u2026\uFF3D").replace(/[#*`]/g, "");
+        tile.createEl("p", { text: preview.slice(0, 160), cls: "kr-tile-preview" });
+        const bottom = tile.createDiv({ cls: "kr-tile-bottom" });
+        bottom.createSpan({ text: card.suspended ? "\u5DF2\u6682\u505C" : card.dueAt <= Date.now() ? "\u5F85\u590D\u4E60" : new Date(card.dueAt).toLocaleDateString(), cls: "kr-tile-due" });
+        bottom.createSpan({ text: card.deck, cls: "kr-tile-deck" });
+        const open = () => new CardDetailModal(this.app, this.host, card).open();
+        tile.addEventListener("click", open);
+        tile.addEventListener("keydown", (e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            open();
+          }
+        });
+      };
+      const favorites = cards.filter((card) => card.favorite);
+      const saved = groups.createEl("details", { cls: "kr-tag-section kr-favorites-section" });
+      saved.open = this.expandedTags.has("__favorites");
+      saved.addEventListener("toggle", () => {
+        if (saved.open) this.expandedTags.add("__favorites");
+        else this.expandedTags.delete("__favorites");
+      });
+      saved.createEl("summary", { text: `\u2661 \u6536\u85CF \xB7 ${favorites.length}` });
+      const savedGrid = saved.createDiv({ cls: "kr-tile-grid" });
+      for (const card of favorites) renderTile(savedGrid, card);
+      if (!favorites.length) savedGrid.createEl("p", { text: "\u5728\u95EA\u5361\u5DE6\u4E0A\u89D2\u70B9\u51FB\u7231\u5FC3\uFF0C\u5373\u53EF\u6DFB\u52A0\u6536\u85CF\u3002", cls: "kr-stat-summary" });
       const tags = unique(cards.flatMap((c) => c.tags.length ? c.tags : ["\u672A\u5206\u7C7B"]));
       for (const tag of tags) {
         const section = groups.createEl("details", { cls: "kr-tag-section" });
@@ -748,23 +900,7 @@ var ReviewView = class extends import_obsidian2.ItemView {
         const members = cards.filter((c) => c.tags.length ? c.tags.includes(tag) : tag === "\u672A\u5206\u7C7B");
         section.createEl("summary", { text: `${tag} \xB7 ${members.length}` });
         const grid = section.createDiv({ cls: "kr-tile-grid" });
-        for (const card of members) {
-          const tile = grid.createDiv({ cls: `kr-card-tile kr-color-${card.color}`, attr: { role: "button", tabindex: "0" } });
-          tile.createEl("strong", { text: cardTitle(card) });
-          const preview = card.kind === "image" ? `\u56FE\u7247\u6316\u7A7A \xB7 ${(_b = (_a = card.occlusions) == null ? void 0 : _a.length) != null ? _b : 0} \u4E2A\u65B9\u5757` : card.question.replace(/\{\{c\d+::([\s\S]*?)\}\}/g, "\uFF3B\u2026\u2026\uFF3D").replace(/[#*`]/g, "");
-          tile.createEl("p", { text: preview.slice(0, 160), cls: "kr-tile-preview" });
-          const bottom = tile.createDiv({ cls: "kr-tile-bottom" });
-          bottom.createSpan({ text: card.suspended ? "\u5DF2\u6682\u505C" : card.dueAt <= Date.now() ? "\u5F85\u590D\u4E60" : new Date(card.dueAt).toLocaleDateString(), cls: "kr-tile-due" });
-          bottom.createSpan({ text: card.deck, cls: "kr-tile-deck" });
-          const open = () => new CardDetailModal(this.app, this.host, card).open();
-          tile.addEventListener("click", open);
-          tile.addEventListener("keydown", (e) => {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              open();
-            }
-          });
-        }
+        for (const card of members) renderTile(grid, card);
       }
       if (!cards.length) groups.createEl("p", { text: "\u5F53\u524D\u6761\u4EF6\u4E0B\u6CA1\u6709\u95EA\u5361\u3002" });
     };
@@ -781,6 +917,8 @@ var ReviewView = class extends import_obsidian2.ItemView {
       renderGroups();
     });
     renderGroups();
+    this.renderStats(root);
+    this.renderForecast(root);
   }
   nextDue() {
     const card = this.host.getDueCards()[0];
@@ -879,28 +1017,44 @@ var CardDetailModal = class extends import_obsidian2.Modal {
     this.contentEl.empty();
   }
   async render() {
-    var _a, _b, _c, _d;
+    var _a, _b, _c, _d, _e, _f;
     const card = this.card, root = this.contentEl;
     root.empty();
     this.setTitle(cardTitle(card));
+    const bar = root.createDiv({ cls: "kr-detail-toolbar" });
+    const favorite = bar.createEl("button", { text: card.favorite ? "\u2665" : "\u2661", cls: `kr-favorite-toggle ${card.favorite ? "is-favorite" : ""}`, attr: { "aria-label": card.favorite ? "\u53D6\u6D88\u6536\u85CF" : "\u6536\u85CF\u95EA\u5361", title: card.favorite ? "\u53D6\u6D88\u6536\u85CF" : "\u6536\u85CF\u95EA\u5361" } });
+    favorite.addEventListener("click", () => {
+      favorite.disabled = true;
+      void this.host.toggleFavorite(card.id).then((active) => {
+        favorite.setText(active ? "\u2665" : "\u2661");
+        favorite.toggleClass("is-favorite", active);
+        favorite.setAttribute("aria-label", active ? "\u53D6\u6D88\u6536\u85CF" : "\u6536\u85CF\u95EA\u5361");
+        favorite.disabled = false;
+      }).catch((error) => {
+        favorite.disabled = false;
+        new import_obsidian2.Notice(String(error));
+      });
+    });
+    bar.createEl("button", { text: "\u7F16\u8F91", cls: "kr-detail-edit" }).addEventListener("click", () => this.openEditor());
     const cardEl = root.createDiv({ cls: `kr-flashcard kr-color-${card.color}` });
     if (card.dueAt > Date.now()) cardEl.createEl("p", { text: "\u63D0\u524D\u590D\u4E60\u5E76\u8BC4\u5206\u4F1A\u91CD\u65B0\u5B89\u6392\u4E0B\u6B21\u590D\u4E60\u65F6\u95F4\u3002", cls: "kr-stat-summary" });
     const questionEl = cardEl.createDiv({ cls: "kr-question markdown-rendered" });
     if (card.kind === "image") {
+      if (card.answer.trim()) await import_obsidian2.MarkdownRenderer.render(this.app, card.answer, questionEl, (_b = (_a = card.source) == null ? void 0 : _a.path) != null ? _b : "", this.component);
       this.renderImage(card, cardEl);
-    } else if (card.kind === "cloze") await this.renderCloze(card, questionEl, cardEl);
-    else await import_obsidian2.MarkdownRenderer.render(this.app, card.question, questionEl, (_b = (_a = card.source) == null ? void 0 : _a.path) != null ? _b : "", this.component);
+    } else if (card.kind === "cloze") await this.renderCloze(card, questionEl);
+    else await import_obsidian2.MarkdownRenderer.render(this.app, card.question, questionEl, (_d = (_c = card.source) == null ? void 0 : _c.path) != null ? _d : "", this.component);
     if (card.kind === "qa") {
-      if (!this.revealed) cardEl.createEl("button", { text: "\u663E\u793A\u7B54\u6848", cls: "kr-reveal mod-cta" }).addEventListener("click", () => {
-        this.revealed = true;
+      cardEl.createEl("button", { text: this.revealed ? "\u9690\u85CF\u7B54\u6848" : "\u663E\u793A\u7B54\u6848", cls: "kr-reveal" }).addEventListener("click", () => {
+        this.revealed = !this.revealed;
         void this.render();
       });
-      else {
+      if (this.revealed) {
         const answer = cardEl.createDiv({ cls: "kr-answer markdown-rendered" });
-        await import_obsidian2.MarkdownRenderer.render(this.app, card.answer, answer, (_d = (_c = card.source) == null ? void 0 : _c.path) != null ? _d : "", this.component);
+        await import_obsidian2.MarkdownRenderer.render(this.app, card.answer, answer, (_f = (_e = card.source) == null ? void 0 : _e.path) != null ? _f : "", this.component);
       }
     }
-    if (this.revealed || this.revealedBlanks.size) this.ensureRatingActions(cardEl, card);
+    this.renderEmbeddedImages(card, cardEl);
     const meta = cardEl.createDiv({ cls: "kr-card-meta" });
     if (card.source) meta.createEl("button", { text: `\u6765\u6E90\uFF1A${card.source.path}`, cls: "kr-source-button" }).addEventListener("click", () => {
       this.close();
@@ -908,15 +1062,6 @@ var CardDetailModal = class extends import_obsidian2.Modal {
     });
     meta.createSpan({ text: card.deck, cls: "kr-tile-deck" });
     const controls = root.createDiv({ cls: "kr-detail-controls" });
-    controls.createEl("button", { text: "\u7F16\u8F91\u5185\u5BB9" }).addEventListener("click", () => {
-      new FlashcardEditModal(this.app, card, (changes) => {
-        void this.host.updateCard(card.id, changes).then(() => {
-          this.revealed = false;
-          this.revealedBlanks.clear();
-          void this.render();
-        }).catch((error) => new import_obsidian2.Notice(String(error)));
-      }).open();
-    });
     if (card.kind === "image") controls.createEl("button", { text: "\u8C03\u6574\u65B9\u5757" }).addEventListener("click", () => {
       void this.editImageBoxes();
     });
@@ -925,6 +1070,15 @@ var CardDetailModal = class extends import_obsidian2.Modal {
         void this.host.deleteCard(card.id).then(() => this.close()).catch((error) => new import_obsidian2.Notice(String(error)));
       }).open();
     });
+    this.renderRatingActions(root, card);
+  }
+  openEditor() {
+    new FlashcardEditModal(this.app, this.card, async (changes) => {
+      await this.host.updateCard(this.card.id, changes);
+      this.revealed = false;
+      this.revealedBlanks.clear();
+      await this.render();
+    }, (file) => this.host.importCardImage(file)).open();
   }
   async editImageBoxes() {
     var _a;
@@ -942,7 +1096,7 @@ var CardDetailModal = class extends import_obsidian2.Modal {
       }).catch((error) => new import_obsidian2.Notice(String(error)));
     }, card.occlusions, card.question).open();
   }
-  async renderCloze(card, target, cardEl) {
+  async renderCloze(card, target) {
     var _a, _b, _c, _d;
     const answers = [];
     const source = card.question.replace(/\{\{c\d+::([\s\S]*?)\}\}/g, (_match, answer) => {
@@ -968,14 +1122,15 @@ var CardDetailModal = class extends import_obsidian2.Modal {
         blank.type = "button";
         blank.className = "kr-inline-blank";
         const reveal = () => {
-          blank.textContent = answers[index];
-          blank.addClass("is-revealed");
-          blank.setAttribute("aria-label", `\u6316\u7A7A ${index + 1}\uFF1A${answers[index]}`);
-          this.revealedBlanks.add(index);
-          this.ensureRatingActions(cardEl, card);
+          if (this.revealedBlanks.has(index)) this.revealedBlanks.delete(index);
+          else this.revealedBlanks.add(index);
+          const visible = this.revealedBlanks.has(index);
+          blank.textContent = visible ? answers[index] : "\u70B9\u51FB\u663E\u793A";
+          blank.toggleClass("is-revealed", visible);
+          blank.setAttribute("aria-label", visible ? `\u9690\u85CF\u6316\u7A7A ${index + 1}` : `\u663E\u793A\u6316\u7A7A ${index + 1}`);
         };
         blank.textContent = this.revealedBlanks.has(index) ? answers[index] : "\u70B9\u51FB\u663E\u793A";
-        blank.setAttribute("aria-label", `\u663E\u793A\u6316\u7A7A ${index + 1}`);
+        blank.setAttribute("aria-label", this.revealedBlanks.has(index) ? `\u9690\u85CF\u6316\u7A7A ${index + 1}` : `\u663E\u793A\u6316\u7A7A ${index + 1}`);
         if (this.revealedBlanks.has(index)) blank.addClass("is-revealed");
         blank.addEventListener("click", reveal);
         fragment.append(blank);
@@ -1001,21 +1156,65 @@ var CardDetailModal = class extends import_obsidian2.Modal {
       blank.style.top = `${box.y * 100}%`;
       blank.style.width = `${box.width * 100}%`;
       blank.style.height = `${box.height * 100}%`;
-      if (this.revealedBlanks.has(index)) blank.addClass("is-revealed");
-      blank.addEventListener("click", () => {
+      if (this.revealedBlanks.has(index)) {
         blank.addClass("is-revealed");
-        blank.setAttribute("aria-label", `\u65B9\u5757 ${index + 1} \u5DF2\u663E\u793A`);
-        this.revealedBlanks.add(index);
-        this.ensureRatingActions(cardEl, card);
+        blank.setAttribute("aria-label", `\u9690\u85CF\u65B9\u5757 ${index + 1}`);
+      }
+      blank.addEventListener("click", () => {
+        if (this.revealedBlanks.has(index)) this.revealedBlanks.delete(index);
+        else this.revealedBlanks.add(index);
+        const visible = this.revealedBlanks.has(index);
+        blank.toggleClass("is-revealed", visible);
+        blank.setAttribute("aria-label", visible ? `\u9690\u85CF\u65B9\u5757 ${index + 1}` : `\u663E\u793A\u65B9\u5757 ${index + 1}`);
       });
     });
   }
-  ensureRatingActions(cardEl, card) {
-    if (cardEl.querySelector(".kr-rating-actions")) return;
-    const actions = cardEl.createDiv({ cls: "kr-rating-actions" });
-    this.ratingButton(actions, "\u5FD8\u8BB0", "again", card);
-    this.ratingButton(actions, "\u56F0\u96BE", "hard", card);
-    this.ratingButton(actions, "\u8BB0\u5F97", "good", card);
+  renderEmbeddedImages(card, cardEl) {
+    var _a;
+    for (const [imageIndex, image] of ((_a = card.images) != null ? _a : []).entries()) {
+      const file = this.app.vault.getAbstractFileByPath(image.path);
+      if (!(file instanceof import_obsidian2.TFile)) {
+        cardEl.createEl("p", { text: `\u627E\u4E0D\u5230\u63D2\u5165\u7684\u56FE\u7247\uFF1A${image.path}`, cls: "kr-error" });
+        continue;
+      }
+      const stage = cardEl.createDiv({ cls: "kr-image-stage kr-review-image" });
+      stage.createEl("img", { attr: { src: this.app.vault.getResourcePath(file), alt: `\u63D2\u5165\u56FE\u7247 ${imageIndex + 1}` } });
+      const overlay = stage.createDiv({ cls: "kr-image-overlay" });
+      image.occlusions.forEach((box, index) => {
+        const key = 1e4 + imageIndex * 1e3 + index;
+        const blank = overlay.createEl("button", { cls: "kr-review-box", attr: { type: "button" } });
+        blank.style.left = `${box.x * 100}%`;
+        blank.style.top = `${box.y * 100}%`;
+        blank.style.width = `${box.width * 100}%`;
+        blank.style.height = `${box.height * 100}%`;
+        const show = () => {
+          const visible = this.revealedBlanks.has(key);
+          blank.toggleClass("is-revealed", visible);
+          blank.setAttribute("aria-label", visible ? "\u9690\u85CF\u56FE\u7247\u7B54\u6848" : "\u663E\u793A\u56FE\u7247\u7B54\u6848");
+        };
+        show();
+        blank.addEventListener("click", () => {
+          if (this.revealedBlanks.has(key)) this.revealedBlanks.delete(key);
+          else this.revealedBlanks.add(key);
+          show();
+        });
+      });
+    }
+  }
+  renderRatingActions(parent, card) {
+    const actions = parent.createDiv({ cls: "kr-rating-actions" });
+    const now = Date.now();
+    const label = (rating) => {
+      const due = scheduleReview(card, rating, this.host.getSettings(), now).dueAt;
+      const days = Math.round((due - now) / 864e5);
+      return days < 1 ? "10 \u5206\u949F" : `${days} \u5929`;
+    };
+    this.ratingButton(actions, `\u8BA4\u8BC6
+${label("good")}`, "good", card);
+    this.ratingButton(actions, `\u6A21\u7CCA
+${label("hard")}`, "hard", card);
+    this.ratingButton(actions, `\u5FD8\u8BB0
+${label("again")}`, "again", card);
   }
   ratingButton(parent, text, rating, card) {
     const button = parent.createEl("button", { text, cls: `kr-rating-${rating}` });
@@ -1245,6 +1444,20 @@ var KnowledgeReviewPlugin = class extends import_obsidian4.Plugin {
   getSettings() {
     return this.store.settings;
   }
+  async toggleFavorite(cardId) {
+    const card = this.store.cards.find((item) => item.id === cardId);
+    if (!card) throw new Error("\u627E\u4E0D\u5230\u95EA\u5361\u3002");
+    card.favorite = !card.favorite;
+    await this.saveStore();
+    return card.favorite;
+  }
+  async importCardImage(file) {
+    if (!/^image\/(png|jpeg|webp|gif)$/.test(file.type)) throw new Error("\u8BF7\u9009\u62E9 PNG\u3001JPG\u3001WebP \u6216 GIF \u56FE\u7247\u3002");
+    await this.ensureFolder("Knowledge Review/\u95EA\u5361\u56FE\u7247");
+    const suffix = file.type === "image/jpeg" ? "jpg" : file.type.split("/")[1];
+    const image = await this.app.vault.createBinary(`Knowledge Review/\u95EA\u5361\u56FE\u7247/${uid("image")}.${suffix}`, await file.arrayBuffer());
+    return image.path;
+  }
   selectionSource(editor, file) {
     const at = editor.getCursor("from");
     return { path: file.path, text: editor.getSelection(), line: at.line, ch: at.ch, heading: nearestHeading(editor, at.line) };
@@ -1342,6 +1555,7 @@ var KnowledgeReviewPlugin = class extends import_obsidian4.Plugin {
     card.deck = changes.deck.trim();
     card.tags = changes.tags;
     if (card.kind === "image" && ((_b = changes.occlusions) == null ? void 0 : _b.length)) card.occlusions = changes.occlusions;
+    if (changes.images) card.images = changes.images;
     card.updatedAt = Date.now();
     await this.saveStore();
   }
