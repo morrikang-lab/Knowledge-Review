@@ -675,6 +675,7 @@ var ReviewView = class extends import_obsidian2.ItemView {
     this.query = "";
     this.order = "newest";
     this.onlyDue = false;
+    this.expandedTags = /* @__PURE__ */ new Set();
     this.filters = { deck: "", tag: "", color: "" };
   }
   getViewType() {
@@ -727,6 +728,8 @@ var ReviewView = class extends import_obsidian2.ItemView {
         renderGroups();
       });
     }
+    this.renderStats(root);
+    this.renderForecast(root);
     const groups = root.createDiv({ cls: "kr-tag-library" });
     const renderGroups = () => {
       var _a, _b;
@@ -736,9 +739,14 @@ var ReviewView = class extends import_obsidian2.ItemView {
       cards.sort((a, b) => this.order === "oldest" ? a.createdAt - b.createdAt : this.order === "modified" ? b.updatedAt - a.updatedAt : this.order === "due" ? a.dueAt - b.dueAt : b.createdAt - a.createdAt);
       const tags = unique(cards.flatMap((c) => c.tags.length ? c.tags : ["\u672A\u5206\u7C7B"]));
       for (const tag of tags) {
-        const section = groups.createEl("section", { cls: "kr-tag-section" });
+        const section = groups.createEl("details", { cls: "kr-tag-section" });
+        section.open = this.expandedTags.has(tag);
+        section.addEventListener("toggle", () => {
+          if (section.open) this.expandedTags.add(tag);
+          else this.expandedTags.delete(tag);
+        });
         const members = cards.filter((c) => c.tags.length ? c.tags.includes(tag) : tag === "\u672A\u5206\u7C7B");
-        section.createEl("h3", { text: `${tag} \xB7 ${members.length}` });
+        section.createEl("summary", { text: `${tag} \xB7 ${members.length}` });
         const grid = section.createDiv({ cls: "kr-tile-grid" });
         for (const card of members) {
           const tile = grid.createDiv({ cls: `kr-card-tile kr-color-${card.color}`, attr: { role: "button", tabindex: "0" } });
@@ -773,8 +781,6 @@ var ReviewView = class extends import_obsidian2.ItemView {
       renderGroups();
     });
     renderGroups();
-    this.renderStats(root);
-    this.renderForecast(root);
   }
   nextDue() {
     const card = this.host.getDueCards()[0];
