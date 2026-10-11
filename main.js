@@ -219,6 +219,16 @@ function scheduleReview(card, rating, settings, now = Date.now()) {
 }
 
 // src/card-tools.ts
+function reviewHeatLevel(count) {
+  if (count <= 0) return 0;
+  if (count <= 2) return 1;
+  if (count <= 5) return 2;
+  if (count <= 10) return 3;
+  if (count <= 18) return 4;
+  if (count <= 28) return 5;
+  if (count <= 40) return 6;
+  return 7;
+}
 function cardTitle(card) {
   var _a;
   if ((_a = card.title) == null ? void 0 : _a.trim()) return card.title.trim();
@@ -790,6 +800,7 @@ var ReviewView = class extends import_obsidian2.ItemView {
     this.query = "";
     this.order = "newest";
     this.onlyDue = false;
+    this.showAllDue = false;
     this.expandedTags = /* @__PURE__ */ new Set();
     this.filters = { deck: "", tag: "", color: "" };
   }
@@ -827,16 +838,19 @@ var ReviewView = class extends import_obsidian2.ItemView {
         saved.scrollIntoView({ behavior: "smooth", block: "nearest" });
       }
     });
+    const filtersMenu = header.createEl("details", { cls: "kr-filter-menu" });
+    filtersMenu.createEl("summary", { text: "\u7B5B\u9009", attr: { "aria-label": "\u6392\u5E8F\u4E0E\u7B5B\u9009" } });
+    const filterPanel = filtersMenu.createDiv({ cls: "kr-filter-panel" });
     const start = root.createEl("button", { text: "\u5F00\u59CB\u4ECA\u65E5\u590D\u4E60", cls: "mod-cta" });
     start.disabled = !this.host.getDueCards().length;
     start.addEventListener("click", () => this.nextDue());
     const toolbar = root.createDiv({ cls: "kr-library-toolbar" });
     const search = toolbar.createEl("input", { type: "search", placeholder: "\u641C\u7D22\u6807\u9898\u3001\u5185\u5BB9\u6216\u6807\u7B7E" });
     search.value = this.query;
-    const sorting = toolbar.createEl("select", { attr: { "aria-label": "\u6392\u5E8F\u65B9\u5F0F" } });
+    const sorting = filterPanel.createEl("select", { attr: { "aria-label": "\u6392\u5E8F\u65B9\u5F0F" } });
     for (const [value, label] of [["newest", "\u521B\u5EFA\u65F6\u95F4\uFF1A\u65B0\u2192\u65E7"], ["oldest", "\u521B\u5EFA\u65F6\u95F4\uFF1A\u65E7\u2192\u65B0"], ["modified", "\u6700\u8FD1\u4FEE\u6539"], ["due", "\u6700\u8FD1\u5230\u671F"]]) sorting.createEl("option", { value, text: label });
     sorting.value = this.order;
-    const dueLabel = toolbar.createEl("label");
+    const dueLabel = filterPanel.createEl("label");
     const dueCheck = dueLabel.createEl("input", { type: "checkbox" });
     dueCheck.checked = this.onlyDue;
     dueLabel.appendText("\u53EA\u770B\u5F85\u590D\u4E60");
@@ -845,7 +859,7 @@ var ReviewView = class extends import_obsidian2.ItemView {
       ["tag", "\u6240\u6709\u6807\u7B7E", unique(this.host.getAllCards().flatMap((c) => c.tags))],
       ["color", "\u6240\u6709\u989C\u8272", unique(this.host.getAllCards().map((c) => c.color))]
     ]) {
-      const select = toolbar.createEl("select", { attr: { "aria-label": label } });
+      const select = filterPanel.createEl("select", { attr: { "aria-label": label } });
       select.createEl("option", { value: "", text: label });
       for (const value of values) select.createEl("option", { value, text: value });
       select.value = this.filters[key];
@@ -854,6 +868,7 @@ var ReviewView = class extends import_obsidian2.ItemView {
         renderGroups();
       });
     }
+    const dueSection = root.createDiv({ cls: "kr-due-section" });
     const groups = root.createDiv({ cls: "kr-tag-library" });
     const renderGroups = () => {
       groups.empty();
@@ -878,6 +893,17 @@ var ReviewView = class extends import_obsidian2.ItemView {
           }
         });
       };
+      dueSection.empty();
+      const due = cards.filter((card) => !card.suspended && card.dueAt <= Date.now()).sort((a, b) => a.dueAt - b.dueAt);
+      dueSection.createEl("h3", { text: `\u4ECA\u65E5\u5F85\u590D\u4E60 \xB7 ${due.length}` });
+      if (due.length) {
+        const dueGrid = dueSection.createDiv({ cls: "kr-tile-grid" });
+        for (const card of this.showAllDue ? due : due.slice(0, 6)) renderTile(dueGrid, card);
+        if (due.length > 6) dueSection.createEl("button", { text: this.showAllDue ? "\u6536\u8D77\u5F85\u590D\u4E60" : `\u67E5\u770B\u5168\u90E8 ${due.length} \u5F20\u5F85\u590D\u4E60`, cls: "kr-show-all-due" }).addEventListener("click", () => {
+          this.showAllDue = !this.showAllDue;
+          renderGroups();
+        });
+      } else dueSection.createEl("p", { text: "\u5F53\u524D\u6CA1\u6709\u5F85\u590D\u4E60\u95EA\u5361\u3002", cls: "kr-stat-summary" });
       const favorites = cards.filter((card) => card.favorite);
       const saved = groups.createEl("details", { cls: "kr-tag-section kr-favorites-section" });
       saved.open = this.expandedTags.has("__favorites");
@@ -941,14 +967,14 @@ var ReviewView = class extends import_obsidian2.ItemView {
     for (let n = 0; n < (new Date(year, month, 1).getDay() + 6) % 7; n++) calendar.createDiv({ cls: "kr-day kr-day-empty" });
     for (let day = 1; day <= new Date(year, month + 1, 0).getDate(); day++) {
       const count = (_b = counts.get(day)) != null ? _b : 0;
-      const level = count === 0 ? 0 : count <= 2 ? 1 : count <= 5 ? 2 : count <= 10 ? 3 : 4;
+      const level = reviewHeatLevel(count);
       const cell = calendar.createEl("button", { text: String(day), cls: `kr-day kr-heat-${level}`, attr: { "aria-label": `${day} \u65E5\u590D\u4E60 ${count} \u6B21` } });
       cell.title = `${day} \u65E5\u590D\u4E60 ${count} \u6B21`;
       cell.addEventListener("click", () => new import_obsidian2.Notice(`${month + 1}\u6708${day}\u65E5 \xB7 \u590D\u4E60 ${count} \u6B21`));
       if (startOfDay(new Date(year, month, day).getTime()) === startOfDay()) cell.addClass("is-today");
     }
     const legend = section.createDiv({ cls: "kr-heat-legend" });
-    ["0 \u6B21", "1\u20132", "3\u20135", "6\u201310", "11+"].forEach((label, level) => legend.createSpan({ text: label, cls: `kr-heat-${level}` }));
+    ["0", "1\u20132", "3\u20135", "6\u201310", "11\u201318", "19\u201328", "29\u201340", "41+"].forEach((label, level) => legend.createSpan({ text: label, cls: `kr-heat-${level}`, attr: { title: `${label} \u6B21` } }));
   }
   renderForecast(parent) {
     const section = parent.createDiv({ cls: "kr-stats kr-forecast" });

@@ -143,10 +143,13 @@
 .kr-day { height: 52px; text-align: left; box-shadow: none; }
 .kr-day small { color: inherit; font-weight: 700; }
 .kr-review-view .kr-heat-0 { --kr-heat-bg: var(--background-secondary); --kr-heat-text: var(--text-muted); }
-.kr-review-view .kr-heat-1 { --kr-heat-bg: color-mix(in srgb, var(--interactive-accent) 20%, var(--background-primary)); --kr-heat-text: var(--text-normal); }
-.kr-review-view .kr-heat-2 { --kr-heat-bg: color-mix(in srgb, var(--interactive-accent) 42%, var(--background-primary)); --kr-heat-text: var(--text-normal); }
-.kr-review-view .kr-heat-3 { --kr-heat-bg: color-mix(in srgb, var(--interactive-accent) 68%, var(--background-primary)); --kr-heat-text: var(--text-normal); }
-.kr-review-view .kr-heat-4 { --kr-heat-bg: var(--interactive-accent); --kr-heat-text: var(--text-on-accent); }
+.kr-review-view .kr-heat-1 { --kr-heat-bg: color-mix(in srgb, var(--interactive-accent) 18%, var(--background-primary)); --kr-heat-text: var(--text-normal); }
+.kr-review-view .kr-heat-2 { --kr-heat-bg: color-mix(in srgb, var(--interactive-accent) 30%, var(--background-primary)); --kr-heat-text: var(--text-normal); }
+.kr-review-view .kr-heat-3 { --kr-heat-bg: color-mix(in srgb, var(--interactive-accent) 42%, var(--background-primary)); --kr-heat-text: var(--text-normal); }
+.kr-review-view .kr-heat-4 { --kr-heat-bg: color-mix(in srgb, var(--interactive-accent) 55%, var(--background-primary)); --kr-heat-text: var(--text-normal); }
+.kr-review-view .kr-heat-5 { --kr-heat-bg: color-mix(in srgb, var(--interactive-accent) 68%, var(--background-primary)); --kr-heat-text: var(--text-on-accent); }
+.kr-review-view .kr-heat-6 { --kr-heat-bg: color-mix(in srgb, var(--interactive-accent) 82%, var(--background-primary)); --kr-heat-text: var(--text-on-accent); }
+.kr-review-view .kr-heat-7 { --kr-heat-bg: var(--interactive-accent); --kr-heat-text: var(--text-on-accent); }
 /* Obsidian themes style buttons directly; the heat level must win on calendar buttons. */
 .kr-review-view .kr-calendar button.kr-day { background: var(--kr-heat-bg) !important; color: var(--kr-heat-text) !important; }
 .kr-review-view .kr-heat-legend span { background: var(--kr-heat-bg); color: var(--kr-heat-text); }
@@ -181,11 +184,9 @@
 .kr-detail-modal .kr-rating-good:hover { background: #0caa98; }
 .kr-detail-modal .kr-rating-hard:hover { background: #b66a25; }
 .kr-detail-modal .kr-rating-again:hover { background: #ca304c; }
-.kr-detail-modal .kr-inline-blank { border: 0; border-bottom: 2px solid var(--interactive-accent); border-radius: 0; background: transparent; color: transparent; min-width: 4em; }
+.kr-detail-modal .kr-inline-blank { border: 0; border-bottom: 2px solid var(--interactive-accent); border-radius: 0; background: transparent; color: transparent; min-width: 72px; }
 .kr-detail-modal .kr-inline-blank.is-revealed { color: var(--text-normal); background: color-mix(in srgb, var(--interactive-accent) 18%, var(--background-primary)); }
-.kr-detail-modal .kr-inline-blank:not(.is-revealed)::before { content: '＿＿＿＿'; color: var(--interactive-accent); }
-.kr-detail-modal .kr-inline-blank:not(.is-revealed) { font-size: 0; }
-.kr-detail-modal .kr-inline-blank:not(.is-revealed)::before { font-size: 14px; }
+.kr-detail-modal .kr-inline-blank:not(.is-revealed) { font-size: 0; height: 1.4rem; }
 .kr-detail-modal .kr-review-image { display: block; width: fit-content; margin: 18px 0; }
 .kr-detail-modal .kr-review-image img { max-height: 45vh; }
 .kr-detail-modal .kr-detail-controls { padding: 0 14px; }
@@ -213,3 +214,17 @@
 @keyframes kr-section-in { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes kr-modal-in { from { opacity: 0; transform: translateY(14px) scale(.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
 @media (prefers-reduced-motion: reduce) { .kr-review-view button, .kr-detail-modal button, .kr-edit-modal button, .kr-tag-section summary { transition: none; } .kr-tag-section[open] .kr-tile-grid, .kr-detail-modal, .kr-edit-modal { animation: none; } }
+
+.kr-filter-menu { position: relative; flex: 0 0 auto; z-index: 20; }
+.kr-filter-menu summary { list-style: none; cursor: pointer; padding: 9px 14px; border-radius: 999px; background: var(--background-secondary); color: var(--text-normal); font-size: .83em; }
+.kr-filter-menu summary::-webkit-details-marker { display: none; }
+.kr-filter-menu[open] summary { background: color-mix(in srgb, var(--interactive-accent) 22%, var(--background-primary)); }
+.kr-filter-panel { position: absolute; right: 0; top: calc(100% + 8px); width: min(290px, 85vw); display: grid; gap: 10px; padding: 14px; border: 1px solid var(--background-modifier-border); border-radius: 16px; background: var(--background-primary); box-shadow: 0 14px 36px rgba(0,0,0,.22); }
+.kr-filter-panel select { display: block; width: 100%; }
+.kr-filter-panel label { display: flex; align-items: center; gap: 8px; font-size: .9em; }
+.kr-due-section { margin: 14px 0 18px; }
+.kr-due-section h3 { margin: 0 0 10px; font-size: 1.08em; }
+.kr-due-section .kr-show-all-due { margin-top: 10px; width: 100%; }
+.kr-tag-library { margin-top: 14px; }
+.kr-heat-legend span { min-width: 38px; text-align: center; }
+@media (max-width: 480px) { .kr-review-title-row { flex-wrap: wrap; } .kr-review-title-row h2 { min-width: 48%; } }
